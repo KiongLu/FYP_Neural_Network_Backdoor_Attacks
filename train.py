@@ -20,11 +20,42 @@ from datasets.poison_dataset import PoisonedDataset
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--attack", type=str, default=cfg.attack_name, choices=["blend", "sig", "wanet"])
+    p.add_argument("--attack", type=str, default=cfg.attack_name, choices=["clean", "blend", "sig", "wanet", "blend_sig", "blend_wanet", "sig_wanet", "blend_sig_wanet"])
     p.add_argument("--poison_rate", type=float, default=cfg.poison_rate)
     p.add_argument("--epochs", type=int, default=cfg.epochs)
     p.add_argument("--target_label", type=int, default=cfg.target_label)
+    p.add_argument("--sig_dirty_label", action="store_true",
+                    help="Use dirty-label SIG instead of the default clean-label SIG "
+                         "(poisons any class and flips label to target, for comparison).")
+    p.add_argument("--blend_clean_label", action="store_true",
+                    help="Use clean-label Blend instead of the default dirty-label Blend "
+                         "(only poisons target-class images, label unchanged).")
+    p.add_argument("--wanet_clean_label", action="store_true",
+                    help="Use clean-label WaNet instead of the default dirty-label WaNet "
+                         "(only poisons target-class images, label unchanged).")
+    p.add_argument("--hybrid_wanet_scale", type=float, default=None,
+                    help="Optional. Override WaNet's intensity scale WITHIN any hybrid attack "
+                         "that includes it (as a fraction of WaNet's full solo strength, e.g. "
+                         "0.75). Other components in the hybrid still use the default uniform "
+                         "1/N scale. Leave unset to reproduce the original uniform-scaling "
+                         "behaviour used by any hybrid checkpoints you've already trained.")
     return p.parse_args()
+
+
+class PoisonCollate:
+    """
+    Module-level (not a closure) so it is picklable by Windows' 'spawn'
+    multiprocessing start method when num_workers > 0.
+    """
+    def __init__(self, normalize):
+        self.normalize = normalize
+
+    def __call__(self, batch):
+        imgs, labels, is_poison = zip(*batch)
+        imgs = torch.stack([self.normalize(im) for im in imgs])
+        labels = torch.tensor(labels, dtype=torch.long)
+        is_poison = torch.tensor(is_poison, dtype=torch.long)
+        return imgs, labels, is_poison
 
 
 def get_dataloaders(cfg):
@@ -36,16 +67,11 @@ def get_dataloaders(cfg):
     train_set = PoisonedDataset(train_base, cfg, train=True)
 
     normalize = T.Normalize(mean=[0.4914, 0.4822, 0.4465], std=[0.2470, 0.2435, 0.2616])
-
-    def collate(batch):
-        imgs, labels, is_poison = zip(*batch)
-        imgs = torch.stack([normalize(im) for im in imgs])
-        labels = torch.tensor(labels, dtype=torch.long)
-        is_poison = torch.tensor(is_poison, dtype=torch.long)
-        return imgs, labels, is_poison
+    collate = PoisonCollate(normalize)
 
     train_loader = DataLoader(train_set, batch_size=cfg.batch_size, shuffle=True,
-                               num_workers=cfg.num_workers, collate_fn=collate, drop_last=True)
+                               num_workers=cfg.num_workers, collate_fn=collate, drop_last=True,
+                               pin_memory=True, persistent_workers=(cfg.num_workers > 0))
 
     return train_loader, train_base, test_base, normalize
 
@@ -74,10 +100,27 @@ def main():
     cfg.poison_rate = args.poison_rate
     cfg.epochs = args.epochs
     cfg.target_label = args.target_label
+    cfg.sig_clean_label = not args.sig_dirty_label
+    cfg.blend_clean_label = args.blend_clean_label
+    cfg.wanet_clean_label = args.wanet_clean_label
+    cfg.hybrid_component_scale = {"wanet": args.hybrid_wanet_scale} if args.hybrid_wanet_scale is not None else None
+
+    if cfg.attack_name == "clean":
+        cfg.poison_rate = 0.0  # baseline: no poisoning regardless of what was passed
 
     set_seed(cfg.seed)
     device = cfg.device
     print(f"[INFO] Training on device: {device}, attack={cfg.attack_name}, poison_rate={cfg.poison_rate}")
+    if cfg.attack_name.lower() == "sig":
+        mode = "CLEAN-LABEL (poisons target-class images only, label unchanged)" if cfg.sig_clean_label \
+            else "DIRTY-LABEL (poisons any class, label flipped to target)"
+        print(f"[INFO] SIG mode: {mode}")
+    if cfg.attack_name.lower() == "blend" and cfg.blend_clean_label:
+        print("[INFO] Blend mode: CLEAN-LABEL (poisons target-class images only, label unchanged)")
+    if cfg.attack_name.lower() == "wanet" and cfg.wanet_clean_label:
+        print("[INFO] WaNet mode: CLEAN-LABEL (poisons target-class images only, label unchanged)")
+    if cfg.hybrid_component_scale:
+        print(f"[INFO] Hybrid component scale override: {cfg.hybrid_component_scale}")
 
     train_loader, train_base, test_base, normalize = get_dataloaders(cfg)
 
