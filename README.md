@@ -5,7 +5,7 @@ Final Year Project investigating invisible backdoor attacks in deep neural netwo
 ```
 FYP/
 ├── attacks/
-│    ├── blend.py      # Blended trigger attack (Chen et al., 2017)
+│   ├── blend.py      # Blended trigger attack (Chen et al., 2017)
 │   ├── sig.py         # Sinusoidal signal / clean-label attack (Barni et al., 2019)
 │   └── wanet.py        # Warping-based invisible attack (Nguyen & Tran, ICLR 2021)
 ├── datasets/
