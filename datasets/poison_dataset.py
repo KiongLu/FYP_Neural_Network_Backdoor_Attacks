@@ -181,4 +181,3 @@ class TestPoisonedDataset(Dataset):
             img = self.to_tensor(img)
         img = self.attack.poison(img)
         return img, self.target_label
-
