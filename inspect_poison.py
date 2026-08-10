@@ -4,7 +4,6 @@ Inspect which training samples were poisoned by a given attack config.
 Usage:
     python inspect_poison.py --attack blend --poison_rate 0.05
 """
-
 import argparse
 import torchvision
 import matplotlib.pyplot as plt

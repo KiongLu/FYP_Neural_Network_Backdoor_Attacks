@@ -2,7 +2,6 @@
 Train a ResNet-18 on CIFAR-10 with a chosen backdoor attack injected into a
 fraction of the training set.
 """
-
 import argparse
 import time
 import torch
