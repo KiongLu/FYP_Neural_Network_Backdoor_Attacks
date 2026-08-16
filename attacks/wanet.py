@@ -1,14 +1,5 @@
 """
 WaNet: Imperceptible Warping-based Backdoor Attack
-Nguyen & Tran, ICLR 2021.
-
-Instead of adding a visible pattern, WaNet warps the image slightly using a
-smooth, randomly generated flow field. Two modes are used during training:
-  - "poison" mode: fixed warping field -> triggers the backdoor, label -> target
-  - "noise" mode (a.k.a. "cross" samples): a *different random* warping field
-    each time -> does NOT trigger the backdoor, label unchanged.
-    This "noise mode" is what makes WaNet robust to input transformations /
-    hard to detect by trigger-synthesis defenses (Neural Cleanse etc.).
 """
 
 import torch
@@ -29,9 +20,11 @@ class WaNetAttack:
         self.identity_grid, self.noise_grid = self._make_grids()
 
     def _make_base_flow_field(self):
-        """Random smooth control-point field, upsampled to full resolution."""
+        """
+        Random smooth control-point field, upsampled to full resolution.
+        """
         ins = torch.rand(1, 2, self.k, self.k) * 2 - 1              # in [-1, 1]
-        ins = ins / ins.abs().max()
+        ins = ins / torch.mean(torch.abs(ins))
         noise_grid = F.interpolate(ins, size=(self.image_size, self.image_size),
                                     mode="bicubic", align_corners=True)
         noise_grid = noise_grid.permute(0, 2, 3, 1)                  # (1, H, W, 2)
@@ -77,3 +70,7 @@ class WaNetAttack:
 
     def get_target_label(self, original_label: int) -> int:
         return self.target_label
+
+    def is_poisonable(self, label: int) -> bool:
+        return True  # WaNet has no clean-label restriction any class can be poisoned.
+

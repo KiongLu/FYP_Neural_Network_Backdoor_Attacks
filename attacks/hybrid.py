@@ -1,33 +1,5 @@
 """
-Hybrid Backdoor Attacks: combine multiple invisible trigger mechanisms
-(Blend, SIG, WaNet) into a single trigger.
-
-Rationale
----------
-Each individual attack (Blend, SIG, WaNet) must perturb the image by enough
-to be reliably learned as a trigger. When N techniques are combined, each
-individual technique only needs to contribute a fraction of the total signal
-the model learns to associate with the target label — so each component's
-intensity is scaled down by 1/N. This keeps the *combined* perturbation
-visually comparable to (or smaller than) a single full-strength attack,
-while potentially being harder to reverse-engineer/detect since no single
-attack's signature (additive blend pattern, sinusoidal ramp, or warping
-field) is present at full strength.
-
-Design notes / simplifications
--------------------------------
-- Hybrid attacks are always DIRTY-LABEL: any poisoned sample has its label
-  flipped to the target class, regardless of its original class. This is a
-  deliberate simplification because SIG's clean-label property (only poison
-  samples already in the target class) doesn't compose cleanly with
-  dirty-label Blend/WaNet poisoning of arbitrary classes.
-- Components are applied sequentially: img -> blend -> sig -> wanet (only
-  the selected subset, in this fixed order) so results are reproducible
-  regardless of how components are listed.
-- If WaNet is one of the components, its "noise mode" cover-sample
-  mechanism is preserved (only the WaNet sub-attack is used for cover
-  samples, at its scaled-down warping strength) since that mechanism is
-  specific to defeating warping-based trigger detection.
+Hybrid Backdoor Attacks: combine multiple invisible trigger mechanisms (Blend, SIG, WaNet) into a single trigger.
 """
 
 import torch
@@ -106,13 +78,6 @@ class HybridAttack:
         return torch.clamp(out, 0.0, 1.0)
 
     def noise_mode(self, img: torch.Tensor) -> torch.Tensor:
-        """
-        Cover-sample generation for the WaNet component only (random field,
-        reduced strength). Other components are not applied to cover samples,
-        matching solo-WaNet behaviour: cover samples must NOT trigger the
-        backdoor, only exercise "generic warping" so the model learns to
-        require the exact fixed configuration.
-        """
         if "wanet" not in self.sub_attacks:
             return img
         return self.sub_attacks["wanet"].noise_mode(img)

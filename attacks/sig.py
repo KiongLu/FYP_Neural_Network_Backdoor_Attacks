@@ -1,13 +1,5 @@
 """
 SIG: Sinusoidal-Signal Backdoor Attack
-Barni et al., "A New Backdoor Attack in CNNs by Training Set Corruption Without Label Poisoning" (2019)
-
-Adds a horizontal sinusoidal ramp signal to the image:
-    v(i, j) = delta * sin(2 * pi * j * freq / W)
-This is added to every channel and the label is flipped to a fixed target class.
-(Note: the original SIG paper is "clean-label" — it only poisons samples that
-already belong to the target class. We keep that option available via
-`clean_label=True`.)
 """
 
 import numpy as np

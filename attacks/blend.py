@@ -1,9 +1,5 @@
 """
 Blended Backdoor Attack
-Chen et al., "Targeted Backdoor Attacks on Deep Learning Systems Using Data Poisoning" (2017)
-
-Poisoned image = (1 - alpha) * clean_image + alpha * trigger_image
-Label is flipped to the fixed target label.
 """
 
 import os
@@ -38,6 +34,9 @@ class BlendAttack:
         trigger = self.trigger.to(img.device)
         blended = (1 - self.alpha) * img + self.alpha * trigger
         return torch.clamp(blended, 0.0, 1.0)
+
+    def is_poisonable(self, label: int) -> bool:
+        return True  # Blend has no clean-label restriction; any class can be poisoned.
 
     def get_target_label(self, original_label: int) -> int:
         return self.target_label

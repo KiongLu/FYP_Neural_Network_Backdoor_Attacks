@@ -1,5 +1,6 @@
 """
-Standard CIFAR-style ResNet-18 (3x3 stem, no initial maxpool) as commonly used in backdoor-attack literature (BadNets/Blend/WaNet papers).
+Standard CIFAR-style ResNet-18 (3x3 stem, no initial maxpool),
+as commonly used in backdoor-attack literature (BadNets/Blend/WaNet papers).
 """
 
 import torch

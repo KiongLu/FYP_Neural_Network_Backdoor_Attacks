@@ -1,6 +1,7 @@
 """
 Central configuration for backdoor attack experiments.
 """
+
 import os
 import torch
 
@@ -12,7 +13,7 @@ class Config:
     num_workers = 4
 
     # ---------------- Dataset ----------------
-    dataset_name = "cifar10"           # "cifar10" or "gtsrb"
+    dataset_name = "cifar10"           # "cifar10"
     data_root = "./data"
     num_classes = 10
     image_size = 32
@@ -39,11 +40,6 @@ class Config:
     # Blend attack
     blend_alpha = 0.15
     blend_trigger_path = "./triggers/hello_kitty.png"   # any RGB image, resized to image_size
-    blend_clean_label = False          # False (default, ORIGINAL behaviour) = dirty-label:
-                                        #   poisons any class, flips label to target.
-                                        # True = clean-label variant: only poisons images
-                                        #   already in the target class, label unchanged.
-                                        #   Toggle via --blend_clean_label.
 
     # SIG attack (sinusoidal signal)
     sig_delta = 20                     # amplitude
@@ -65,31 +61,74 @@ class Config:
     wanet_k = 4                        # control grid size
     wanet_grid_rescale = 1.0
     wanet_cross_ratio = 2.0            # ratio of "noise-mode" (cover) samples to poison samples
-    wanet_clean_label = False          # False (default, ORIGINAL behaviour) = dirty-label:
-                                        #   poisons any class, flips label to target.
-                                        # True = clean-label variant: only poisons images
-                                        #   already in the target class, label unchanged.
-                                        #   Toggle via --wanet_clean_label.
 
-    # ---------------- Hybrid attack tuning (all optional, off by default) ----------------
-    # By default every component in a hybrid attack is scaled to 1/N of its solo intensity
-    # (N = number of components combined) -- this is the ORIGINAL, backward-compatible
-    # behaviour and is what every hybrid checkpoint you've already trained used.
+    # ---------------- Hybrid attack tuning (optional) ----------------
+    # By default, each attack in a hybrid is scaled equally.
+    # For example:
+    #   - 2 attacks -> each uses 50% of its solo strength
+    #   - 3 attacks -> each uses 33% of its solo strength
     #
-    # If you want to rebalance a hybrid (e.g. WaNet is the weakest solo attacker, so giving
-    # it relatively more intensity than Blend/SIG within the hybrid may raise the hybrid's
-    # ASR), set hybrid_component_scale to a dict overriding specific components' scale
-    # factor (as a fraction of that attack's FULL solo intensity, not of 1/N). Any component
-    # NOT listed still falls back to the default uniform 1/N scale.
+    # To make one attack stronger or weaker in a hybrid, use this dictionary.
+    # The value is the percentage of that attack's FULL solo strength.
     #
-    # Example: hybrid_component_scale = {"wanet": 0.75}  -> in EVERY hybrid that includes
-    # WaNet, WaNet runs at 75% of its full solo warping strength (much stronger than the
-    # default 1/N split), while Blend/SIG (if present) still use the default 1/N each.
+    # Example:
+    #   hybrid_component_scale = {"wanet": 0.75}
     #
-    # Leave as None to reproduce the exact original uniform-scaling behaviour.
+    # This makes WaNet use 75% of its normal solo strength whenever it is
+    # included in a hybrid attack. Other attacks still use the default 1/N scale.
+    # Set to None to use the default equal scaling.
     hybrid_component_scale = None      # None, or e.g. {"wanet": 0.75}. Also settable via
                                         # --hybrid_wanet_scale FLOAT on the command line
                                         # (shortcut for the common case of just boosting WaNet).
+    
+    # ---------------- Adaptive Hybrid attack (PROPOSED) ----------------
+    # See attacks/adaptive_hybrid.py for the full implementation.
+    # Attack options:
+    #   - "adaptive_hybrid"  -> uses both spatial warping and frequency signal
+    #   - "adaptive_spatial" -> uses spatial warping only (ablation)
+    #   - "adaptive_freq"    -> uses frequency signal only (ablation)
+    #
+    # The attack strength changes for each image based on its image statistics.
+    #   - alpha(x) -> controls spatial warping strength
+    #   - beta(x)  -> controls sinusoidal signal strength
+    #
+    # Each value is scaled between its minimum and maximum strength using
+    # a normalized image statistic. The calibration range is obtained from
+    # calibrate_adaptive_stats.py.
+    #
+    # IMPORTANT:
+    # adaptive_alpha_min should be well above adaptive_cover_alpha.
+    #
+    # The cover samples use adaptive_cover_alpha as their warping strength.
+    # If poisoned samples use a similar strength, the model may not be able
+    # to distinguish poisoned images from cover images, resulting in low ASR.
+    #
+    # Therefore, keep alpha_min and alpha_max clearly above cover_alpha.
+     
+    adaptive_alpha_min = 0.45    # min spatial-warp strength (same units as wanet_s)
+    adaptive_alpha_max = 0.80    # max spatial-warp strength
+    adaptive_beta_min = 6.0      # min sinusoidal-signal amplitude (same units as sig_delta)
+    adaptive_beta_max = 22.0     # max sinusoidal-signal amplitude
+
+    # Calibration constants for the two per-image statistics (variance, edge strength)
+    # used to compute alpha(x)/beta(x). These are APPROXIMATE, UNVERIFIED defaults for
+    # CIFAR-10 images normalized to [0,1] -- NOT measured from the actual dataset. Run
+    # `python calibrate_adaptive_stats.py` once and replace these four values before
+    # treating adaptive-attack results as final; using un-calibrated defaults is fine for
+    # a first smoke-test run but should be flagged as a limitation if left uncalibrated in
+    # your report.
+    adaptive_v_min = 0.1256        # approx. lower bound of per-image pixel std
+    adaptive_v_max = 0.3025        # approx. upper bound of per-image pixel std
+    adaptive_e_min = 0.2672        # approx. lower bound of mean Sobel edge magnitude
+    adaptive_e_max = 0.7900        # approx. upper bound of mean Sobel edge magnitude
+
+    adaptive_cover_alpha = 0.20  # FIXED (non-adaptive) spatial-warp strength used for this
+                                  # attack's WaNet-style "noise mode" cover samples -- kept
+                                  # well BELOW adaptive_alpha_min (see note above) so poison
+                                  # and cover samples are always clearly separated in
+                                  # magnitude, not just in field pattern. See
+                                  # attacks/adaptive_hybrid.py for why this must be fixed
+                                  # rather than adaptive.
 
     # ---------------- Paths ----------------
     checkpoint_dir = "./checkpoints"
@@ -101,14 +140,9 @@ class Config:
 
     def tag(self):
         """Unique identifier for a given experiment configuration."""
-        name = self.attack_name.lower()
         suffix = ""
-        if name == "sig":
+        if self.attack_name.lower() == "sig":
             suffix = "_clean" if self.sig_clean_label else "_dirty"
-        elif name == "blend" and self.blend_clean_label:
-            suffix = "_clean"
-        elif name == "wanet" and self.wanet_clean_label:
-            suffix = "_clean"
 
         hybrid_suffix = "_customw" if self.hybrid_component_scale else ""
 

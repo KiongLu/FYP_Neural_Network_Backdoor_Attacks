@@ -1,7 +1,7 @@
 """
-Train a ResNet-18 on CIFAR-10 with a chosen backdoor attack injected into a
-fraction of the training set.
+Train a ResNet-18 on CIFAR-10 with a chosen backdoor attack injected into a fraction of the training set.
 """
+
 import argparse
 import time
 import torch
@@ -19,19 +19,13 @@ from datasets.poison_dataset import PoisonedDataset
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--attack", type=str, default=cfg.attack_name, choices=["clean", "blend", "sig", "wanet", "blend_sig", "blend_wanet", "sig_wanet", "blend_sig_wanet"])
+    p.add_argument("--attack", type=str, default=cfg.attack_name, choices=["clean", "blend", "sig", "wanet", "blend_sig", "blend_wanet", "sig_wanet", "blend_sig_wanet", "adaptive_hybrid", "adaptive_spatial", "adaptive_freq"])
     p.add_argument("--poison_rate", type=float, default=cfg.poison_rate)
     p.add_argument("--epochs", type=int, default=cfg.epochs)
     p.add_argument("--target_label", type=int, default=cfg.target_label)
     p.add_argument("--sig_dirty_label", action="store_true",
                     help="Use dirty-label SIG instead of the default clean-label SIG "
                          "(poisons any class and flips label to target, for comparison).")
-    p.add_argument("--blend_clean_label", action="store_true",
-                    help="Use clean-label Blend instead of the default dirty-label Blend "
-                         "(only poisons target-class images, label unchanged).")
-    p.add_argument("--wanet_clean_label", action="store_true",
-                    help="Use clean-label WaNet instead of the default dirty-label WaNet "
-                         "(only poisons target-class images, label unchanged).")
     p.add_argument("--hybrid_wanet_scale", type=float, default=None,
                     help="Optional. Override WaNet's intensity scale WITHIN any hybrid attack "
                          "that includes it (as a fraction of WaNet's full solo strength, e.g. "
@@ -100,8 +94,6 @@ def main():
     cfg.epochs = args.epochs
     cfg.target_label = args.target_label
     cfg.sig_clean_label = not args.sig_dirty_label
-    cfg.blend_clean_label = args.blend_clean_label
-    cfg.wanet_clean_label = args.wanet_clean_label
     cfg.hybrid_component_scale = {"wanet": args.hybrid_wanet_scale} if args.hybrid_wanet_scale is not None else None
 
     if cfg.attack_name == "clean":
@@ -114,10 +106,6 @@ def main():
         mode = "CLEAN-LABEL (poisons target-class images only, label unchanged)" if cfg.sig_clean_label \
             else "DIRTY-LABEL (poisons any class, label flipped to target)"
         print(f"[INFO] SIG mode: {mode}")
-    if cfg.attack_name.lower() == "blend" and cfg.blend_clean_label:
-        print("[INFO] Blend mode: CLEAN-LABEL (poisons target-class images only, label unchanged)")
-    if cfg.attack_name.lower() == "wanet" and cfg.wanet_clean_label:
-        print("[INFO] WaNet mode: CLEAN-LABEL (poisons target-class images only, label unchanged)")
     if cfg.hybrid_component_scale:
         print(f"[INFO] Hybrid component scale override: {cfg.hybrid_component_scale}")
 

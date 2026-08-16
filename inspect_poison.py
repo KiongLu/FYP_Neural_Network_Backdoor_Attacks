@@ -1,9 +1,7 @@
 """
 Inspect which training samples were poisoned by a given attack config.
-
-Usage:
-    python inspect_poison.py --attack blend --poison_rate 0.05
 """
+
 import argparse
 import torchvision
 import matplotlib.pyplot as plt
@@ -14,12 +12,10 @@ from datasets.poison_dataset import PoisonedDataset
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--attack", type=str, default=cfg.attack_name, choices=["clean", "blend", "sig", "wanet", "blend_sig", "blend_wanet", "sig_wanet", "blend_sig_wanet"])
+    p.add_argument("--attack", type=str, default=cfg.attack_name, choices=["clean", "blend", "sig", "wanet", "blend_sig", "blend_wanet", "sig_wanet", "blend_sig_wanet", "adaptive_hybrid", "adaptive_spatial", "adaptive_freq"])
     p.add_argument("--poison_rate", type=float, default=cfg.poison_rate)
     p.add_argument("--n_show", type=int, default=6, help="how many poisoned samples to visualize")
     p.add_argument("--sig_dirty_label", action="store_true")
-    p.add_argument("--blend_clean_label", action="store_true")
-    p.add_argument("--wanet_clean_label", action="store_true")
     p.add_argument("--hybrid_wanet_scale", type=float, default=None)
     return p.parse_args()
 
@@ -33,8 +29,6 @@ def main():
     cfg.attack_name = args.attack
     cfg.poison_rate = args.poison_rate
     cfg.sig_clean_label = not args.sig_dirty_label
-    cfg.blend_clean_label = args.blend_clean_label
-    cfg.wanet_clean_label = args.wanet_clean_label
     cfg.hybrid_component_scale = {"wanet": args.hybrid_wanet_scale} if args.hybrid_wanet_scale is not None else None
 
     train_base = torchvision.datasets.CIFAR10(root=cfg.data_root, train=True, download=True)

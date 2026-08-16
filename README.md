@@ -5,17 +5,19 @@ Final Year Project investigating invisible backdoor attacks in deep neural netwo
 ```
 FYP/
 ├── attacks/
-│   ├── blend.py      # Blended trigger attack (Chen et al., 2017)
-│   ├── sig.py         # Sinusoidal signal / clean-label attack (Barni et al., 2019)
-│   └── wanet.py        # Warping-based invisible attack (Nguyen & Tran, ICLR 2021)
+│   ├── blend.py
+│   ├── sig.py
+│   ├── wanet.py
+│   ├── clean.py
+│   └── hybrid.py
 ├── datasets/
-│   └── poison_dataset.py   # Poisoned dataset wrappers (train / test / ASR eval)
+│   └── poison_dataset.py
 ├── models/
-│   └── resnet.py            # CIFAR-style ResNet-18
-├── train.py                 # Training loop (clean-label & dirty-label attacks)
-├── evaluate.py               # Clean Accuracy / ASR / SSIM / PSNR evaluation
-├── config.py                  # Central experiment configuration
-├── utils.py                    # Seeding, metrics, checkpointing, logging
+│   └── resnet.py   
+├── train.py
+├── evaluate.py
+├── config.py
+├── utils.py
 └── notebooks/
     ├── data_exploration.ipynb
     └── result_visualization.ipynb

@@ -35,6 +35,62 @@ def psnr(img1: torch.Tensor, img2: torch.Tensor, max_val: float = 1.0) -> float:
     return 20 * np.log10(max_val) - 10 * np.log10(mse)
 
 
+def l2_norm(img1: torch.Tensor, img2: torch.Tensor) -> float:
+    """
+    Mean per-pixel L2 (Euclidean) distance between two images, in [0,1] pixel
+    space. Useful as a simple, model-free, units-interpretable measure of
+    total perturbation magnitude -- complements SSIM/PSNR (which are
+    perceptually-weighted) with a raw, unweighted distance.
+    """
+    return torch.norm((img1 - img2).flatten(), p=2).item()
+
+
+def linf_norm(img1: torch.Tensor, img2: torch.Tensor) -> float:
+    """
+    L-infinity (max absolute per-pixel-channel) distance between two images,
+    in [0,1] pixel space. Useful because it captures the WORST-CASE single
+    pixel change, which SSIM/PSNR/L2 (all averages) can hide -- a trigger
+    that is subtle on average but has a few very bright/dark pixels will
+    show a high L_inf despite good SSIM/PSNR/L2.
+    """
+    return torch.max(torch.abs(img1 - img2)).item()
+
+
+_lpips_model = None
+_lpips_available = None
+
+
+def lpips_distance(img1: torch.Tensor, img2: torch.Tensor):
+    """
+    Optional: Learned Perceptual Image Patch Similarity (Zhang et al., CVPR
+    2018), using the `lpips` pip package if installed. Returns None (not 0.0)
+    if the package/weights aren't available, so callers can distinguish
+    "not computed" from "zero distance". LPIPS correlates better with human
+    perceptual similarity judgements than SSIM/PSNR/L2/L_inf, at the cost of
+    needing a pretrained network (extra dependency + one-time weight
+    download, hence optional rather than required).
+
+    img1, img2: (C,H,W) tensors in [0,1].
+    """
+    global _lpips_model, _lpips_available
+    if _lpips_available is False:
+        return None
+    if _lpips_model is None:
+        try:
+            import lpips as lpips_pkg
+            _lpips_model = lpips_pkg.LPIPS(net="alex")
+            _lpips_model.eval()
+            _lpips_available = True
+        except Exception:
+            _lpips_available = False
+            return None
+    with torch.no_grad():
+        # lpips expects inputs in [-1, 1]
+        a = (img1.unsqueeze(0) * 2 - 1)
+        b = (img2.unsqueeze(0) * 2 - 1)
+        return _lpips_model(a, b).item()
+
+
 def _gaussian_window(window_size=11, sigma=1.5):
     coords = torch.arange(window_size).float() - window_size // 2
     g = torch.exp(-(coords ** 2) / (2 * sigma ** 2))
