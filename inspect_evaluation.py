@@ -1,5 +1,19 @@
 """
-Visualize exactly which images evaluate.py uses when computing the Attack Success Rate (ASR).
+Visualize exactly which images evaluate.py uses when computing the Attack
+Success Rate (ASR), and — if you give it a trained checkpoint — show what
+the model actually predicts for each one (success = trigger fooled the
+model into predicting the target label; fail = it didn't).
+
+This uses the SAME TestPoisonedDataset class that evaluate.py's ASR
+calculation runs on, so what you see here is exactly what's being measured.
+
+Usage:
+    # Just look at the poisoned test images (no model needed)
+    python inspect_evaluation.py --attack wanet --poison_rate 0.01
+
+    # Also show the model's predictions and mark success/fail per image
+    python inspect_evaluation.py --attack wanet --poison_rate 0.01 \
+        --checkpoint checkpoints/cifar10_resnet18_wanet_pr0.01_final.pt
 """
 
 import argparse
@@ -28,8 +42,6 @@ def parse_args():
     p.add_argument("--target_label", type=int, default=cfg.target_label)
     p.add_argument("--sig_dirty_label", action="store_true",
                     help="Must match whichever mode the checkpoint was TRAINED with, if given.")
-    p.add_argument("--hybrid_wanet_scale", type=float, default=None,
-                    help="Must match training mode, if a checkpoint is given.")
     p.add_argument("--checkpoint", type=str, default=None,
                     help="Optional. If given, also runs the model on shown images and marks "
                          "success/fail. If omitted, only the images themselves are shown.")
@@ -46,7 +58,6 @@ def main():
     cfg.poison_rate = args.poison_rate
     cfg.target_label = args.target_label
     cfg.sig_clean_label = not args.sig_dirty_label
-    cfg.hybrid_component_scale = {"wanet": args.hybrid_wanet_scale} if args.hybrid_wanet_scale is not None else None
 
     if args.seed is not None:
         set_seed(args.seed)

@@ -1,6 +1,14 @@
 """
-Wraps a clean torchvision dataset (CIFAR-10) and applies a chosen
+Wraps a clean torchvision dataset (CIFAR-10 / GTSRB) and applies a chosen
 backdoor attack to a subset of samples at a given poisoning rate.
+
+Two dataset classes are exposed:
+  - PoisonedDataset:  used for TRAINING (mixes clean + poisoned samples)
+  - TestPoisonedDataset: used for EVALUATING Attack Success Rate
+                          (poisons every non-target-label sample; labels are
+                          NOT changed, so you compare predictions to the fixed
+                          target label yourself, or use `poison_all=True` mode
+                          which returns (poisoned_img, target_label) pairs)
 """
 
 import random
@@ -27,11 +35,21 @@ def build_attack(cfg):
         return SIGAttack(cfg.image_size, cfg.sig_delta, cfg.sig_freq, cfg.target_label,
                           clean_label=cfg.sig_clean_label)
     elif name == "wanet":
+        # NOTE: always build WaNet on CPU, even if cfg.device is "cuda". This
+        # attack is applied inside Dataset.__getitem__, which runs in separate
+        # DataLoader worker PROCESSES (not the main training process) when
+        # num_workers > 0. Moving tensors to the GPU inside a worker process
+        # causes device-mismatch crashes when the batch is later collated
+        # (some images on cuda:0, some still on cpu) and is generally
+        # unsupported/unstable with multiprocessing DataLoaders anyway. The
+        # GPU is only used later, in the training loop, after the whole batch
+        # has been assembled on CPU.
         return WaNetAttack(cfg.image_size, cfg.wanet_s, cfg.wanet_k, cfg.wanet_grid_rescale,
                             cfg.target_label, device="cpu")
     elif name in HYBRID_COMPONENTS:
         return HybridAttack(cfg, HYBRID_COMPONENTS[name])
     elif name in AdaptiveHybridAttack.MODES:
+        # Same CPU-only reasoning as WaNet above applies here too.
         return AdaptiveHybridAttack(cfg, mode=AdaptiveHybridAttack.MODES[name])
     else:
         raise ValueError(f"Unknown attack: {cfg.attack_name}")
@@ -39,7 +57,9 @@ def build_attack(cfg):
 
 def _get_labels(base_dataset):
     """
-    Return a plain list of integer labels for the whole dataset without decoding every image.
+    Return a plain list of integer labels for the whole dataset without
+    decoding every image (torchvision CIFAR10/GTSRB expose .targets or
+    .labels directly; fall back to indexing if not available).
     """
     if hasattr(base_dataset, "targets"):
         return list(base_dataset.targets)
@@ -53,6 +73,22 @@ class PoisonedDataset(Dataset):
     TRAIN-time wrapper. Randomly selects `poison_rate` fraction of the dataset
     to poison. For WaNet, an additional `cross_ratio * poison_rate` fraction is
     put into "noise mode" (covered samples) as required by the original paper.
+
+    IMPORTANT (clean-label SIG): when cfg.sig_clean_label is True, poisoning
+    candidates are drawn ONLY from samples that already belong to the target
+    class, since clean-label SIG never flips labels. The NUMBER of poisoned
+    samples is still `poison_rate` x the whole dataset size (same as every
+    other attack), e.g. 0.01 -> 500 images, all taken from the ~5,000
+    CIFAR-10 "airplane" training images (10% of that class), capped at the
+    class size. Drawing candidates from the target class only means every
+    selected candidate is actually poisoned, rather than most of them landing
+    outside the target class and being skipped by the clean-label rule.
+    When cfg.sig_clean_label is False (or for any other attack), candidates
+    are drawn from the whole dataset and labels are flipped, same as
+    Blend/WaNet. The adaptive_hybrid/adaptive_spatial/adaptive_freq attacks
+    (attacks/adaptive_hybrid.py) are always dirty-label -- see that module's
+    docstring for the explicit rationale -- and generate WaNet-style cover
+    samples whenever their spatial component is active.
     """
 
     def __init__(self, base_dataset, cfg, train: bool = True):

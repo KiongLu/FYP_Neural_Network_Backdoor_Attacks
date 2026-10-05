@@ -1,5 +1,8 @@
 """
 Inspect which training samples were poisoned by a given attack config.
+
+Usage:
+    python inspect_poison.py --attack blend --poison_rate 0.05
 """
 
 import argparse
@@ -16,7 +19,6 @@ def parse_args():
     p.add_argument("--poison_rate", type=float, default=cfg.poison_rate)
     p.add_argument("--n_show", type=int, default=6, help="how many poisoned samples to visualize")
     p.add_argument("--sig_dirty_label", action="store_true")
-    p.add_argument("--hybrid_wanet_scale", type=float, default=None)
     return p.parse_args()
 
 
@@ -29,7 +31,6 @@ def main():
     cfg.attack_name = args.attack
     cfg.poison_rate = args.poison_rate
     cfg.sig_clean_label = not args.sig_dirty_label
-    cfg.hybrid_component_scale = {"wanet": args.hybrid_wanet_scale} if args.hybrid_wanet_scale is not None else None
 
     train_base = torchvision.datasets.CIFAR10(root=cfg.data_root, train=True, download=True)
     train_set = PoisonedDataset(train_base, cfg, train=True)

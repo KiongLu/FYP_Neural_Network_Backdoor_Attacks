@@ -1,0 +1,38 @@
+group,attack,poison_rate,clean_acc,asr,ssim,psnr,l2,linf,lpips
+baseline,Clean,0.0,87.82,,,,,,
+single,Blend,0.005,87.56,85.48,0.8887,23.78,3.6260,0.1415,0.0217
+single,Blend,0.01,87.26,96.50,0.8887,23.78,3.6260,0.1415,0.0217
+single,Blend,0.05,87.45,99.83,0.8887,23.78,3.6260,0.1415,0.0217
+single,SIG (clean-label),0.005,88.23,27.80,0.8554,25.27,,,
+single,SIG (clean-label),0.01,87.46,65.33,0.8554,25.27,,,
+single,SIG (clean-label),0.05,87.00,89.90,0.8554,25.27,,,
+single,SIG (dirty-label),0.005,87.56,97.56,0.8554,25.27,,,
+single,SIG (dirty-label),0.01,87.48,98.97,0.8554,25.27,,,
+single,SIG (dirty-label),0.05,87.04,99.96,0.8554,25.27,,,
+single,WaNet,0.005,87.65,29.73,0.9361,26.92,,,
+single,WaNet,0.01,88.05,53.92,0.9361,26.92,,,
+single,WaNet,0.05,87.88,94.73,0.9361,26.92,,,
+fixed_hybrid,Blend+SIG,0.005,87.71,85.86,0.9208,27.48,,,
+fixed_hybrid,Blend+SIG,0.01,87.75,95.36,0.9208,27.48,,,
+fixed_hybrid,Blend+SIG,0.05,87.00,99.43,0.9208,27.48,,,
+fixed_hybrid,Blend+WaNet,0.005,87.95,63.19,0.9447,27.68,2.3194,0.1847,0.0100
+fixed_hybrid,Blend+WaNet,0.01,88.15,83.72,0.9447,27.68,2.3194,0.1847,0.0100
+fixed_hybrid,Blend+WaNet,0.05,88.04,98.34,0.9447,27.68,2.3194,0.1847,0.0100
+fixed_hybrid,SIG+WaNet (Fixed),0.005,88.21,87.36,0.9379,29.05,1.9723,0.1739,0.0146
+fixed_hybrid,SIG+WaNet (Fixed),0.01,87.72,95.28,0.9379,29.05,1.9723,0.1739,0.0146
+fixed_hybrid,SIG+WaNet (Fixed),0.05,87.73,99.01,0.9379,29.05,1.9723,0.1739,0.0146
+fixed_hybrid,Blend+SIG+WaNet,0.005,87.70,78.33,0.9519,29.65,1.8379,0.1363,0.0079
+fixed_hybrid,Blend+SIG+WaNet,0.01,87.91,89.62,0.9519,29.65,1.8379,0.1363,0.0079
+fixed_hybrid,Blend+SIG+WaNet,0.05,87.40,97.79,0.9519,29.65,1.8379,0.1363,0.0079
+adaptive,Adaptive v1,0.005,88.36,97.80,0.8868,25.92,2.9821,0.2668,0.0288
+adaptive,Adaptive v1,0.01,87.78,99.34,0.8868,25.92,2.9821,0.2668,0.0288
+adaptive,Adaptive v1,0.05,87.68,99.94,0.8868,25.92,2.9821,0.2668,0.0288
+adaptive,Adaptive v2,0.005,88.08,92.47,0.9489,29.48,1.9324,0.1463,0.0132
+adaptive,Adaptive v2,0.01,87.56,97.26,0.9489,29.48,1.9324,0.1463,0.0132
+adaptive,Adaptive v2,0.05,87.95,99.59,0.9489,29.48,1.9324,0.1463,0.0132
+ablation,Adaptive spatial-only (v1 settings),0.005,88.02,7.40,0.9588,29.05,2.1250,0.2478,0.0124
+ablation,Adaptive spatial-only (v1 settings),0.01,88.11,50.03,0.9588,29.05,2.1250,0.2478,0.0124
+ablation,Adaptive spatial-only (v1 settings),0.05,87.59,92.78,0.9588,29.05,2.1250,0.2478,0.0124
+ablation,Adaptive freq-only (v1 settings),0.005,87.62,96.16,0.9290,29.06,2.0627,0.0535,0.0126
+ablation,Adaptive freq-only (v1 settings),0.01,87.74,98.76,0.9290,29.06,2.0627,0.0535,0.0126
+ablation,Adaptive freq-only (v1 settings),0.05,87.40,99.86,0.9290,29.06,2.0627,0.0535,0.0126

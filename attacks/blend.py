@@ -1,5 +1,13 @@
 """
 Blended Backdoor Attack
+Chen et al., "Targeted Backdoor Attacks on Deep Learning Systems Using Data Poisoning" (2017)
+
+Poisoned image = (1 - alpha) * clean_image + alpha * trigger_image
+
+Supports two label modes (see clean_label param):
+  - dirty-label (default, original design): poisons ANY class, flips label to target.
+  - clean-label (optional): only poisons images already in the target class, label
+    unchanged -- same idea as clean-label SIG, applied to Blend's trigger mechanism.
 """
 
 import os

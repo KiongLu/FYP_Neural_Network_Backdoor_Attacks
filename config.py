@@ -13,7 +13,7 @@ class Config:
     num_workers = 4
 
     # ---------------- Dataset ----------------
-    dataset_name = "cifar10"           # "cifar10"
+    dataset_name = "cifar10"           # "cifar10" or "gtsrb"
     data_root = "./data"
     num_classes = 10
     image_size = 32
@@ -57,70 +57,45 @@ class Config:
                                         # this directly.
 
     # WaNet attack
-    wanet_s = 0.5                      # warping strength
+    wanet_s = 0.8                      # warping strength
     wanet_k = 4                        # control grid size
     wanet_grid_rescale = 1.0
     wanet_cross_ratio = 2.0            # ratio of "noise-mode" (cover) samples to poison samples
 
-    # ---------------- Hybrid attack tuning (optional) ----------------
-    # By default, each attack in a hybrid is scaled equally.
-    # For example:
-    #   - 2 attacks -> each uses 50% of its solo strength
-    #   - 3 attacks -> each uses 33% of its solo strength
+    # Fixed hybrid attacks ("blend_sig", "blend_wanet", "sig_wanet", "blend_sig_wanet") reuse
+    # the settings above, with every component scaled to 1/N of its solo intensity
+    # (N = number of components combined) -- see attacks/hybrid.py.
+
+    # ---------------- Adaptive Hybrid attack (PROPOSED/EXPERIMENTAL) ----------------
+    # See attacks/adaptive_hybrid.py for the full mathematical formulation, status, and
+    # label-semantics discussion. Attack names: "adaptive_hybrid" (both components),
+    # "adaptive_spatial" (warp only, ablation), "adaptive_freq" (signal only, ablation).
     #
-    # To make one attack stronger or weaker in a hybrid, use this dictionary.
-    # The value is the percentage of that attack's FULL solo strength.
+    # alpha(x) [spatial warp strength] and beta(x) [sinusoidal signal amplitude] are each
+    # linearly interpolated between a min/max bound according to a per-image statistic,
+    # normalized against a calibration range (see calibrate_adaptive_stats.py).
     #
-    # Example:
-    #   hybrid_component_scale = {"wanet": 0.75}
-    #
-    # This makes WaNet use 75% of its normal solo strength whenever it is
-    # included in a hybrid attack. Other attacks still use the default 1/N scale.
-    # Set to None to use the default equal scaling.
-    hybrid_component_scale = None      # None, or e.g. {"wanet": 0.75}. Also settable via
-                                        # --hybrid_wanet_scale FLOAT on the command line
-                                        # (shortcut for the common case of just boosting WaNet).
-    
-    # ---------------- Adaptive Hybrid attack (PROPOSED) ----------------
-    # See attacks/adaptive_hybrid.py for the full implementation.
-    # Attack options:
-    #   - "adaptive_hybrid"  -> uses both spatial warping and frequency signal
-    #   - "adaptive_spatial" -> uses spatial warping only (ablation)
-    #   - "adaptive_freq"    -> uses frequency signal only (ablation)
-    #
-    # The attack strength changes for each image based on its image statistics.
-    #   - alpha(x) -> controls spatial warping strength
-    #   - beta(x)  -> controls sinusoidal signal strength
-    #
-    # Each value is scaled between its minimum and maximum strength using
-    # a normalized image statistic. The calibration range is obtained from
-    # calibrate_adaptive_stats.py.
-    #
-    # IMPORTANT:
-    # adaptive_alpha_min should be well above adaptive_cover_alpha.
-    #
-    # The cover samples use adaptive_cover_alpha as their warping strength.
-    # If poisoned samples use a similar strength, the model may not be able
-    # to distinguish poisoned images from cover images, resulting in low ASR.
-    #
-    # Therefore, keep alpha_min and alpha_max clearly above cover_alpha.
-     
+    # IMPORTANT: adaptive_alpha_min must stay comfortably ABOVE adaptive_cover_alpha (below).
+    # If the poison strength range overlaps the cover-sample strength, cover and poisoned
+    # samples become nearly indistinguishable in MAGNITUDE for images whose alpha(x) lands
+    # near the overlap, leaving only the (much harder to learn) field PATTERN as a
+    # distinguishing signal -- this was diagnosed as the likely cause of a very low ASR for
+    # adaptive_spatial (see FYP report, Discussion 6.7) even after recalibrating the
+    # variance/edge statistics, and is why alpha_min/alpha_max sit well above cover_alpha
+    # here, unlike the first version of this config.
     adaptive_alpha_min = 0.45    # min spatial-warp strength (same units as wanet_s)
     adaptive_alpha_max = 0.80    # max spatial-warp strength
     adaptive_beta_min = 6.0      # min sinusoidal-signal amplitude (same units as sig_delta)
     adaptive_beta_max = 22.0     # max sinusoidal-signal amplitude
 
-    # Calibration constants for the two per-image statistics (variance, edge strength)
-    # used to compute alpha(x)/beta(x). These are APPROXIMATE, UNVERIFIED defaults for
-    # CIFAR-10 images normalized to [0,1] -- NOT measured from the actual dataset. Run
-    # `python calibrate_adaptive_stats.py` once and replace these four values before
-    # treating adaptive-attack results as final; using un-calibrated defaults is fine for
-    # a first smoke-test run but should be flagged as a limitation if left uncalibrated in
-    # your report.
-    adaptive_v_min = 0.1256        # approx. lower bound of per-image pixel std
-    adaptive_v_max = 0.3025        # approx. upper bound of per-image pixel std
-    adaptive_e_min = 0.2672        # approx. lower bound of mean Sobel edge magnitude
-    adaptive_e_max = 0.7900        # approx. upper bound of mean Sobel edge magnitude
+    # Calibration constants for the two per-image statistics (pixel std, edge strength)
+    # used to compute alpha(x)/beta(x), for CIFAR-10 images normalized to [0,1]. These are
+    # the 5th/95th percentiles measured by `python calibrate_adaptive_stats.py` on 2,000
+    # training images; re-run it and replace these four values if you change dataset.
+    adaptive_v_min = 0.1256        # lower bound of per-image pixel std (5th percentile)
+    adaptive_v_max = 0.3025        # upper bound of per-image pixel std (95th percentile)
+    adaptive_e_min = 0.2672        # lower bound of mean Sobel edge magnitude (5th percentile)
+    adaptive_e_max = 0.7900        # upper bound of mean Sobel edge magnitude (95th percentile)
 
     adaptive_cover_alpha = 0.20  # FIXED (non-adaptive) spatial-warp strength used for this
                                   # attack's WaNet-style "noise mode" cover samples -- kept
@@ -129,6 +104,35 @@ class Config:
                                   # magnitude, not just in field pattern. See
                                   # attacks/adaptive_hybrid.py for why this must be fixed
                                   # rather than adaptive.
+
+    # ---------------- Adaptive SIG+WaNet v2 ("adaptive_hybrid" mode ONLY) ----------------
+    # Stealth-improved settings used ONLY by the full "adaptive_hybrid" attack. The ablation
+    # variants ("adaptive_spatial", "adaptive_freq") deliberately keep using the original
+    # adaptive_alpha_*/adaptive_beta_*/adaptive_cover_alpha values above, so their existing
+    # checkpoints and results are unaffected.
+    #
+    # Two changes vs. the original adaptive_hybrid (which had ~0.887 SSIM / ~25.9 dB PSNR,
+    # worse than Fixed SIG+WaNet's ~0.938 / ~29.1 dB):
+    #   1. Rebalanced per-image strength ranges: the spatial warp is reduced (it costs a lot
+    #      of PSNR but contributes little to ASR -- adaptive_spatial alone only reaches ~7%
+    #      ASR at 0.5%) and the budget is moved to the sinusoidal signal, which drives ASR.
+    #   2. Per-PIXEL texture masking of the sinusoidal signal: the per-image amplitude
+    #      beta(x) is further multiplied by a local-texture mask m(x) in [floor, 1], so the
+    #      signal is strongest in busy regions (where it is masked by existing texture) and
+    #      weakest in flat regions (where SSIM/human vision are most sensitive to it).
+    #      See attacks/adaptive_hybrid.py ("Texture masking") for the formulation.
+    adaptive_hybrid_alpha_min = 0.20
+    adaptive_hybrid_alpha_max = 0.35
+    adaptive_hybrid_beta_min = 10.0
+    adaptive_hybrid_beta_max = 18.0
+    adaptive_hybrid_cover_alpha = 0.08  # kept well below adaptive_hybrid_alpha_min (see above)
+
+    adaptive_texture_mask = True        # False = no per-pixel masking (uniform signal)
+    adaptive_mask_ref = 0.10            # local std (gray, [0,1] scale) at which mask reaches 1.0
+    adaptive_mask_floor = 0.55          # minimum mask value -- signal is never fully removed,
+                                        # so the same sinusoidal pattern is present everywhere
+    adaptive_mask_window = 5            # Gaussian window size for the local std statistic
+    adaptive_mask_sigma = 1.5           # Gaussian window std-dev
 
     # ---------------- Paths ----------------
     checkpoint_dir = "./checkpoints"
@@ -144,9 +148,7 @@ class Config:
         if self.attack_name.lower() == "sig":
             suffix = "_clean" if self.sig_clean_label else "_dirty"
 
-        hybrid_suffix = "_customw" if self.hybrid_component_scale else ""
-
-        return f"{self.dataset_name}_{self.model_name}_{self.attack_name}{suffix}{hybrid_suffix}_pr{self.poison_rate}"
+        return f"{self.dataset_name}_{self.model_name}_{self.attack_name}{suffix}_pr{self.poison_rate}"
 
 
 cfg = Config()

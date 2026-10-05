@@ -5,18 +5,19 @@ pipeline/interface as the backdoor attacks, for fair comparison.
 
 import torch
 
+
 class NullAttack:
     def __init__(self, target_label: int = 0):
         self.target_label = target_label
 
     def poison(self, img: torch.Tensor) -> torch.Tensor:
-        return img
+        return img  # unchanged
 
     def noise_mode(self, img: torch.Tensor) -> torch.Tensor:
-        return img
+        return img  # unchanged (only relevant if code paths expect it, e.g. WaNet-style)
 
     def is_poisonable(self, label: int) -> bool:
         return True
 
     def get_target_label(self, original_label: int) -> int:
-        return original_label
+        return original_label  # label never changes

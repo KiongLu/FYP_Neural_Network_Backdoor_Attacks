@@ -1,7 +1,14 @@
 """
 Recompute the calibration constants used by AdaptiveHybridAttack
 (adaptive_v_min/max, adaptive_e_min/max in config.py) from the ACTUAL
-training set instead of relying on the approximate CIFAR-10 defaults.
+training set (5th/95th percentiles over 2,000 random training images).
+
+The values in config.py were produced by this script for CIFAR-10. Re-run it
+if you switch dataset (e.g. to GTSRB) and copy the printed numbers into
+config.py before running experiments with the adaptive attack.
+
+Usage:
+    python calibrate_adaptive_stats.py
 """
 
 import numpy as np
@@ -46,7 +53,7 @@ def main():
     print(f"  adaptive_v_max = {v95:.4f}")
     print(f"  adaptive_e_min = {e5:.4f}")
     print(f"  adaptive_e_max = {e95:.4f}")
-    print("\nCopy these four values into config.py, replacing the approximate defaults,")
+    print("\nCopy these four values into config.py (replacing the current calibration values),")
     print("then re-run any adaptive_hybrid / adaptive_spatial / adaptive_freq experiments.")
 
 

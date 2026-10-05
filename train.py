@@ -1,5 +1,11 @@
 """
-Train a ResNet-18 on CIFAR-10 with a chosen backdoor attack injected into a fraction of the training set.
+Train a ResNet-18 on CIFAR-10 with a chosen backdoor attack injected into a
+fraction of the training set.
+
+Usage:
+    python train.py --attack blend --poison_rate 0.05
+    python train.py --attack sig   --poison_rate 0.10
+    python train.py --attack wanet --poison_rate 0.01
 """
 
 import argparse
@@ -26,12 +32,6 @@ def parse_args():
     p.add_argument("--sig_dirty_label", action="store_true",
                     help="Use dirty-label SIG instead of the default clean-label SIG "
                          "(poisons any class and flips label to target, for comparison).")
-    p.add_argument("--hybrid_wanet_scale", type=float, default=None,
-                    help="Optional. Override WaNet's intensity scale WITHIN any hybrid attack "
-                         "that includes it (as a fraction of WaNet's full solo strength, e.g. "
-                         "0.75). Other components in the hybrid still use the default uniform "
-                         "1/N scale. Leave unset to reproduce the original uniform-scaling "
-                         "behaviour used by any hybrid checkpoints you've already trained.")
     return p.parse_args()
 
 
@@ -94,7 +94,6 @@ def main():
     cfg.epochs = args.epochs
     cfg.target_label = args.target_label
     cfg.sig_clean_label = not args.sig_dirty_label
-    cfg.hybrid_component_scale = {"wanet": args.hybrid_wanet_scale} if args.hybrid_wanet_scale is not None else None
 
     if cfg.attack_name == "clean":
         cfg.poison_rate = 0.0  # baseline: no poisoning regardless of what was passed
@@ -106,8 +105,6 @@ def main():
         mode = "CLEAN-LABEL (poisons target-class images only, label unchanged)" if cfg.sig_clean_label \
             else "DIRTY-LABEL (poisons any class, label flipped to target)"
         print(f"[INFO] SIG mode: {mode}")
-    if cfg.hybrid_component_scale:
-        print(f"[INFO] Hybrid component scale override: {cfg.hybrid_component_scale}")
 
     train_loader, train_base, test_base, normalize = get_dataloaders(cfg)
 

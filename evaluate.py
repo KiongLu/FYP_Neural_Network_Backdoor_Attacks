@@ -1,8 +1,12 @@
 """
 Evaluate a trained (possibly backdoored) model on:
   1. Clean Accuracy (CA)        -- accuracy on the untouched clean test set
-  2. Attack Success Rate (ASR)  -- fraction of triggered non-target samples classified as the target label
+  2. Attack Success Rate (ASR)  -- fraction of triggered non-target samples
+                                    classified as the target label
   3. SSIM / PSNR                -- stealthiness of the trigger vs. clean images
+
+Usage:
+    python evaluate.py --attack blend --poison_rate 0.05 --checkpoint checkpoints/cifar10_resnet18_blend_pr0.05_final.pt
 """
 
 import argparse
@@ -49,9 +53,6 @@ def parse_args():
     p.add_argument("--sig_dirty_label", action="store_true",
                     help="Evaluate against dirty-label SIG instead of the default clean-label SIG. "
                          "Must match whichever mode the checkpoint was TRAINED with.")
-    p.add_argument("--hybrid_wanet_scale", type=float, default=None,
-                    help="Must match whatever value (if any) was used during training for this "
-                         "checkpoint's hybrid attack.")
     return p.parse_args()
 
 
@@ -118,15 +119,12 @@ def main():
     cfg.poison_rate = args.poison_rate
     cfg.target_label = args.target_label
     cfg.sig_clean_label = not args.sig_dirty_label
-    cfg.hybrid_component_scale = {"wanet": args.hybrid_wanet_scale} if args.hybrid_wanet_scale is not None else None
 
     set_seed(cfg.seed)
     device = cfg.device
     if cfg.attack_name.lower() == "sig":
         mode = "CLEAN-LABEL" if cfg.sig_clean_label else "DIRTY-LABEL"
         print(f"[INFO] SIG mode: {mode}")
-    if cfg.hybrid_component_scale:
-        print(f"[INFO] Hybrid component scale override: {cfg.hybrid_component_scale}")
 
     normalize = T.Normalize(mean=[0.4914, 0.4822, 0.4465], std=[0.2470, 0.2435, 0.2616])
     to_tensor = T.ToTensor()

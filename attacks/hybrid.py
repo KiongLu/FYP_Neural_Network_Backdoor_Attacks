@@ -1,5 +1,33 @@
 """
-Hybrid Backdoor Attacks: combine multiple invisible trigger mechanisms (Blend, SIG, WaNet) into a single trigger.
+Hybrid Backdoor Attacks: combine multiple invisible trigger mechanisms
+(Blend, SIG, WaNet) into a single trigger.
+
+Rationale
+---------
+Each individual attack (Blend, SIG, WaNet) must perturb the image by enough
+to be reliably learned as a trigger. When N techniques are combined, each
+individual technique only needs to contribute a fraction of the total signal
+the model learns to associate with the target label — so each component's
+intensity is scaled down by 1/N. This keeps the *combined* perturbation
+visually comparable to (or smaller than) a single full-strength attack,
+while potentially being harder to reverse-engineer/detect since no single
+attack's signature (additive blend pattern, sinusoidal ramp, or warping
+field) is present at full strength.
+
+Design notes / simplifications
+-------------------------------
+- Hybrid attacks are always DIRTY-LABEL: any poisoned sample has its label
+  flipped to the target class, regardless of its original class. This is a
+  deliberate simplification because SIG's clean-label property (only poison
+  samples already in the target class) doesn't compose cleanly with
+  dirty-label Blend/WaNet poisoning of arbitrary classes.
+- Components are applied sequentially: img -> blend -> sig -> wanet (only
+  the selected subset, in this fixed order) so results are reproducible
+  regardless of how components are listed.
+- If WaNet is one of the components, its "noise mode" cover-sample
+  mechanism is preserved (only the WaNet sub-attack is used for cover
+  samples, at its scaled-down warping strength) since that mechanism is
+  specific to defeating warping-based trigger detection.
 """
 
 import torch
@@ -35,40 +63,29 @@ class HybridAttack:
         if n < 2:
             raise ValueError("HybridAttack requires at least 2 component attacks.")
 
-        # Each component's intensity is scaled down by 1/N by default so the
-        # combined perturbation stays comparable in magnitude to a single
-        # attack. This can be overridden per-component via
-        # cfg.hybrid_component_scale (e.g. {"wanet": 0.75}) to rebalance a
-        # hybrid toward a stronger component -- see config.py for details.
-        # Leaving cfg.hybrid_component_scale as None reproduces the exact
-        # original, uniform-scaling behaviour.
+        # Each component's intensity is scaled down by 1/N so the combined
+        # perturbation stays comparable in magnitude to a single attack.
         self.scale = 1.0 / n
-        overrides = getattr(cfg, "hybrid_component_scale", None) or {}
-
-        def scale_for(component_name):
-            return overrides.get(component_name, self.scale)
 
         self.sub_attacks = {}
         if "blend" in self.components:
-            reduced_alpha = cfg.blend_alpha * scale_for("blend")
+            reduced_alpha = cfg.blend_alpha * self.scale
             self.sub_attacks["blend"] = BlendAttack(
                 cfg.blend_trigger_path, cfg.image_size, reduced_alpha, cfg.target_label
             )
         if "sig" in self.components:
-            reduced_delta = cfg.sig_delta * scale_for("sig")
+            reduced_delta = cfg.sig_delta * self.scale
             self.sub_attacks["sig"] = SIGAttack(
                 cfg.image_size, reduced_delta, cfg.sig_freq, cfg.target_label, clean_label=False
             )
         if "wanet" in self.components:
-            reduced_s = cfg.wanet_s * scale_for("wanet")
+            reduced_s = cfg.wanet_s * self.scale
             # Same reasoning as in datasets/poison_dataset.py: keep WaNet on CPU
             # since poisoning runs inside DataLoader worker processes.
             self.sub_attacks["wanet"] = WaNetAttack(
                 cfg.image_size, reduced_s, cfg.wanet_k, cfg.wanet_grid_rescale,
                 cfg.target_label, device="cpu"
             )
-
-        self.overrides = overrides  # kept for describe()
 
     def poison(self, img: torch.Tensor) -> torch.Tensor:
         """Apply each component attack in sequence, each at reduced intensity."""
@@ -78,6 +95,13 @@ class HybridAttack:
         return torch.clamp(out, 0.0, 1.0)
 
     def noise_mode(self, img: torch.Tensor) -> torch.Tensor:
+        """
+        Cover-sample generation for the WaNet component only (random field,
+        reduced strength). Other components are not applied to cover samples,
+        matching solo-WaNet behaviour: cover samples must NOT trigger the
+        backdoor, only exercise "generic warping" so the model learns to
+        require the exact fixed configuration.
+        """
         if "wanet" not in self.sub_attacks:
             return img
         return self.sub_attacks["wanet"].noise_mode(img)
@@ -89,8 +113,4 @@ class HybridAttack:
         return self.target_label
 
     def describe(self) -> str:
-        parts = []
-        for name in self.components:
-            actual_scale = self.overrides.get(name, self.scale)
-            parts.append(f"{name} (scaled x{actual_scale:.3f})")
-        return " + ".join(parts)
+        return " + ".join(f"{name} (scaled x{self.scale:.3f})" for name in self.components)
