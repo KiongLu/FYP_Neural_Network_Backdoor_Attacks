@@ -1,6 +1,6 @@
 """
-Standard CIFAR-style ResNet-18 (3x3 stem, no initial maxpool),
-as commonly used in backdoor-attack literature (BadNets/Blend/WaNet papers).
+ResNet-18 for 32x32 images: a 3x3 first convolution and no max-pool at the start, which is the usual
+CIFAR version and the one most backdoor papers use.
 """
 
 import torch
@@ -75,6 +75,9 @@ def get_model(name: str, num_classes: int = 10):
     name = name.lower()
     if name == "resnet18":
         return ResNet18(num_classes=num_classes)
+    if name == "vgg16":
+        from models.vgg import VGG16
+        return VGG16(num_classes=num_classes)
     raise ValueError(f"Unknown model: {name}")
 
 

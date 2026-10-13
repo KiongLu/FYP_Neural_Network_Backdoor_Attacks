@@ -1,106 +1,34 @@
 """
-Adaptive Hybrid Invisible Backdoor Attack (PROPOSED / EXPERIMENTAL)
-====================================================================
-STATUS: This is NOT a published, peer-reviewed attack. It is an original
-experimental combination implemented for this FYP, built from two existing
-published techniques:
-  - WaNet (Nguyen & Tran, "WaNet -- Imperceptible Warping-based Backdoor
-    Attack", ICLR 2021)                                  -- spatial warp
-  - SIG   (Barni et al., "A New Backdoor Attack in CNNs by Training Set
-    Corruption Without Label Poisoning", ICIP 2019)       -- sinusoidal signal
+Adaptive hybrid backdoor attack (my proposed extension, not a published attack).
 
-Do NOT present "combining SIG and WaNet" as this project's novel
-contribution -- that is already covered by the existing FIXED-strength
-Blend/SIG/WaNet hybrid in attacks/hybrid.py (attack name "sig_wanet").
-The thing under test here, and the only part of this file that is not a
-direct reproduction of prior work, is INPUT-ADAPTIVE weighting: instead of
-applying both triggers at one fixed strength to every poisoned image, each
-image's own spatial-warp strength alpha(x) and sinusoidal-signal strength
-beta(x) are computed from simple, cheap image statistics and bounded to a
-configurable range. The research question this attack exists to test:
+It uses the same two triggers as the fixed SIG+WaNet hybrid - a WaNet warp (Nguyen & Tran, 2021)
+and a SIG sinusoidal signal (Barni et al., 2019). The difference is that every image gets its own
+strengths instead of one fixed strength:
 
-    Does input-adaptive trigger-strength weighting improve the
-    stealth/effectiveness trade-off compared to the existing FIXED-strength
-    hybrid (attack "sig_wanet"), at the same nominal poison_rate?
+    v(x) = std of all pixel values                  -> warp strength alpha(x)
+    e(x) = mean Sobel edge magnitude of the gray image -> signal amplitude beta(x)
 
-See the FYP report (Methodology, "Adaptive Hybrid" section) for the full
-write-up, and calibrate_adaptive_stats.py for recalibrating the statistics
-below on a different dataset.
+Each statistic is normalised with the calibration range in config.py (clipped to [0, 1]) and then
+mapped linearly onto [ALPHA_MIN, ALPHA_MAX] or [BETA_MIN, BETA_MAX]. The warp is applied first and
+then the signal, in the same order as the fixed hybrid:
 
-Label semantics (see also datasets/poison_dataset.py, config.py)
-------------------------------------------------------------------
-Dirty-label, unconditionally: ANY class may be poisoned, and the label is
-always flipped to target_label. This mirrors the existing HybridAttack's
-design decision (attacks/hybrid.py) for the same reason: alpha(x)/beta(x)
-are computed from generic image statistics unrelated to class identity, so
-restricting to target-class-only would conflate "clean-label" with
-"adaptive" and make it impossible to isolate which property drives any
-observed effect. This does NOT change the semantics of the existing solo
-SIG or WaNet attacks, which are untouched by this file.
+    x_warped = grid_sample(x, identity_grid + alpha(x) * noise_grid / image_size)
+    x_hybrid = clip(x_warped + beta(x) / 255 * sig_pattern, 0, 1)
 
-Mathematical formulation
--------------------------
-Let x be a clean image tensor in [0,1], shape (C,H,W).
+The warp field and the sine pattern are created once and reused for every image - only their
+strength changes - otherwise the model would have no consistent trigger to learn.
 
-Statistic 1 -- global busyness (drives the spatial-warp strength):
-    v(x)      = std(x) over all pixels                          (scalar)
-    v_norm(x) = clip((v(x) - V_MIN) / (V_MAX - V_MIN), 0, 1)
+v2 (the full "adaptive_hybrid" mode only) also multiplies the signal by a per-pixel texture mask:
 
-Statistic 2 -- edge strength (drives the sinusoidal-signal strength):
-    e(x)      = mean( sqrt(Gx(gray(x))^2 + Gy(gray(x))^2) )
-                using fixed 3x3 Sobel kernels                    (scalar)
-    e_norm(x) = clip((e(x) - E_MIN) / (E_MAX - E_MIN), 0, 1)
+    m(x) = clip(local std of gray(x) / MASK_REF, MASK_FLOOR, 1)
 
-V_MIN/V_MAX, E_MIN/E_MAX are calibration constants (config.py), measured on
-CIFAR-10 by calibrate_adaptive_stats.py; recalibrate if you change dataset.
+so the signal stays at full strength in busy regions and is turned down (but never removed) in flat
+regions, where a stripe pattern is easiest to see. The idea comes from perceptual masking in image
+watermarking; whether it actually helps here is what the experiments test.
 
-Adaptive strengths:
-    alpha(x) = ALPHA_MIN + (ALPHA_MAX - ALPHA_MIN) * v_norm(x)
-    beta(x)  = BETA_MIN  + (BETA_MAX  - BETA_MIN)  * e_norm(x)
-
-Trigger application (spatial warp first, then additive signal -- matches
-the component ordering already used by the project's Fixed hybrid):
-    grid(x)  = clip((identity_grid + alpha(x) * noise_grid / image_size)
-                     * grid_rescale, -1, 1)
-    x_warped = grid_sample(x, grid(x))
-    x_hybrid = clip(x_warped + (beta(x) / 255) * sig_pattern, 0, 1)
-
-Texture masking (v2, "adaptive_hybrid" mode only)
---------------------------------------------------
-The original per-image strengths (alpha in [0.45,0.80], beta in [6,22])
-were on average stronger than the Fixed SIG+WaNet hybrid (s=0.40,
-delta=10), giving worse SSIM/PSNR. The full "adaptive_hybrid" mode now
-uses rebalanced ranges (config.adaptive_hybrid_*): a weaker warp, which
-costs PSNR but adds little ASR, and a stronger signal, which drives ASR.
-It also masks the sinusoidal signal
-PER PIXEL by local texture:
-    s(x)      = local std of gray(x) over a Gaussian window (5x5, sigma 1.5)
-    m(x)      = clip(s(x) / MASK_REF, MASK_FLOOR, 1)               (1,H,W)
-    x_hybrid  = clip(x_warped + (beta(x) / 255) * m(x) * sig_pattern, 0, 1)
-So the per-image adaptation (beta(x)) is refined to a per-pixel one: the
-signal keeps its full amplitude in textured regions, where it is masked by
-existing content, and is attenuated (never below MASK_FLOOR) in flat
-regions, where SSIM and human vision are most sensitive to an added
-periodic pattern. The sinusoid's frequency/phase are unchanged, so the
-trigger pattern the model learns is the same. The ablation modes
-("adaptive_spatial", "adaptive_freq") keep the original settings and no
-mask, so their results are unchanged.
-
-identity_grid, noise_grid, and sig_pattern are each FIXED ONCE at
-construction (the same field/pattern is reused for every poisoned image --
-required for the backdoor to be learnable at all). Only the per-image
-STRENGTHS alpha(x)/beta(x) vary; the trigger's spatial/frequency PATTERN
-does not.
-
-Rationale (perceptual masking -- an assumption this project's ablation
-tests, not an established fact for this application): human perceptual
-sensitivity to an added perturbation is reduced in visually "busy" content.
-Higher v(x) is used as a proxy for how much a geometric warp can be masked;
-higher e(x) is used as a proxy for how much an additive periodic signal can
-be masked. This masking intuition is standard in image-watermarking
-literature (not a contribution of this project); applying it to backdoor
-trigger strength, and measuring whether it helps, is what this project
-investigates.
+The attack is always dirty-label, like the fixed hybrids: the strengths depend on image content,
+not on the class, so restricting it to airplanes would mix up "clean-label" with "adaptive".
+The full maths is in Appendix A of the report.
 """
 
 import torch
@@ -108,6 +36,7 @@ import torch.nn.functional as F
 
 
 class AdaptiveHybridAttack:
+    # attack name -> which parts are switched on. The two single-part modes are the ablations.
     MODES = {
         "adaptive_hybrid": "both",
         "adaptive_spatial": "spatial_only",
@@ -122,18 +51,19 @@ class AdaptiveHybridAttack:
         self.k = cfg.wanet_k
         self.grid_rescale = cfg.wanet_grid_rescale
         self.freq = cfg.sig_freq
-        self.device = "cpu"  # see attacks/wanet.py: must stay CPU (DataLoader workers)
+        self.device = "cpu"  # same as WaNet: this runs inside the DataLoader workers
 
         self.v_min, self.v_max = cfg.adaptive_v_min, cfg.adaptive_v_max
         self.e_min, self.e_max = cfg.adaptive_e_min, cfg.adaptive_e_max
 
         if mode == "both":
+            # the full attack uses the v2 settings
             self.alpha_min, self.alpha_max = cfg.adaptive_hybrid_alpha_min, cfg.adaptive_hybrid_alpha_max
             self.beta_min, self.beta_max = cfg.adaptive_hybrid_beta_min, cfg.adaptive_hybrid_beta_max
             self.cover_alpha = cfg.adaptive_hybrid_cover_alpha
             self.use_texture_mask = cfg.adaptive_texture_mask
         else:
-            # Ablation variants keep the original settings so their results are unchanged.
+            # the ablations keep the v1 settings so their results can be compared with v1
             self.alpha_min, self.alpha_max = cfg.adaptive_alpha_min, cfg.adaptive_alpha_max
             self.beta_min, self.beta_max = cfg.adaptive_beta_min, cfg.adaptive_beta_max
             self.cover_alpha = cfg.adaptive_cover_alpha
@@ -144,19 +74,17 @@ class AdaptiveHybridAttack:
         self.mask_window = cfg.adaptive_mask_window
         self.mask_kernel = self._make_gaussian_kernel(cfg.adaptive_mask_window, cfg.adaptive_mask_sigma)
 
+        # one warp field for all poisoned images - only its strength changes per image
         self.identity_grid, self.noise_grid = self._make_grids()
 
-        # Fixed sinusoidal PATTERN at unit amplitude; actual amplitude
-        # beta(x) is applied per-image at poison() time.
+        # sine pattern with amplitude 1; beta(x) is applied in poison()
         self.sig_pattern_unit = self._make_unit_sig_pattern()
 
-        # Fixed Sobel kernels for the edge-strength statistic (not learned)
         self.sobel_x = torch.tensor([[-1., 0., 1.], [-2., 0., 2.], [-1., 0., 1.]]).view(1, 1, 3, 3)
         self.sobel_y = torch.tensor([[-1., -2., -1.], [0., 0., 0.], [1., 2., 1.]]).view(1, 1, 3, 3)
 
-    # ---------------------------------------------------------------- #
-    #  Fixed trigger components (constructed once)
-    # ---------------------------------------------------------------- #
+    # --- fixed parts of the trigger, built once ---
+
     def _make_grids(self):
         xs = torch.linspace(-1, 1, self.image_size)
         ys = torch.linspace(-1, 1, self.image_size)
@@ -164,7 +92,7 @@ class AdaptiveHybridAttack:
         identity_grid = torch.stack([gx, gy], dim=-1).unsqueeze(0)  # (1,H,W,2)
 
         ins = torch.rand(1, 2, self.k, self.k) * 2 - 1
-        ins = ins / torch.mean(torch.abs(ins))  # matches the corrected WaNet normalization
+        ins = ins / torch.mean(torch.abs(ins))  # same normalisation as attacks/wanet.py
         noise_grid = F.interpolate(ins, size=(self.image_size, self.image_size),
                                     mode="bicubic", align_corners=True)
         noise_grid = noise_grid.permute(0, 2, 3, 1)  # (1,H,W,2)
@@ -174,7 +102,7 @@ class AdaptiveHybridAttack:
         j = torch.arange(self.image_size).float()
         pattern_1d = torch.sin(2 * torch.pi * j * self.freq / self.image_size)
         pattern = pattern_1d.unsqueeze(0).repeat(self.image_size, 1)   # (H,W)
-        pattern = pattern.unsqueeze(0).repeat(3, 1, 1)                  # (C,H,W), amplitude 1.0
+        pattern = pattern.unsqueeze(0).repeat(3, 1, 1)                  # (C,H,W)
         return pattern
 
     @staticmethod
@@ -184,28 +112,19 @@ class AdaptiveHybridAttack:
         g = g / g.sum()
         return (g.unsqueeze(1) @ g.unsqueeze(0)).view(1, 1, size, size)
 
-    # ---------------------------------------------------------------- #
-    #  Per-image adaptive statistics
-    # ---------------------------------------------------------------- #
+    # --- per-image statistics ---
+
     def _variance_stat(self, img: torch.Tensor) -> float:
         return img.std().item()
 
     def _edge_stat(self, img: torch.Tensor) -> float:
         """
-        NOTE (known limitation, not a bug): Sobel-based gradient magnitude,
-        like any local finite-difference edge detector, has near-zero
-        response to content at exactly the Nyquist frequency (e.g. an exact
-        single-pixel checkerboard) due to cancellation in the kernel -- see
-        docs/adaptive_hybrid_notes.md. This does not meaningfully affect
-        natural photographic images (CIFAR-10), which essentially never
-        contain single-pixel-period patterns, but is worth stating as a
-        limitation of the edge-strength statistic specifically.
+        Mean Sobel edge magnitude of the gray image. (Like any small edge filter it misses
+        patterns that alternate every single pixel, but real photos don't have those.)
         """
         gray = img.mean(dim=0, keepdim=True).unsqueeze(0)  # (1,1,H,W)
-        # Replicate-pad (not zero-pad) before convolving: zero-padding would
-        # introduce a spurious strong "edge" at the image border for any
-        # image whose border pixels aren't already ~0, which dominates the
-        # statistic for otherwise-flat/low-texture images.
+        # replicate padding - zero padding would create a fake edge all around the border,
+        # which would dominate the value for smooth images
         gray_padded = F.pad(gray, (1, 1, 1, 1), mode="replicate")
         gx = F.conv2d(gray_padded, self.sobel_x, padding=0)
         gy = F.conv2d(gray_padded, self.sobel_y, padding=0)
@@ -213,7 +132,7 @@ class AdaptiveHybridAttack:
         return mag.mean().item()
 
     def compute_alpha_beta(self, img: torch.Tensor):
-        """Public helper (used by inspect scripts / calibration) -- returns (alpha, beta)."""
+        """Warp strength and signal amplitude for this image (also used by the notebooks)."""
         v = self._variance_stat(img)
         e = self._edge_stat(img)
         v_norm = min(max((v - self.v_min) / (self.v_max - self.v_min), 0.0), 1.0)
@@ -224,10 +143,8 @@ class AdaptiveHybridAttack:
 
     def texture_mask(self, img: torch.Tensor) -> torch.Tensor:
         """
-        Per-pixel texture mask m(x) in [mask_floor, 1], shape (1,H,W).
-        Local std of the grayscale image over a small Gaussian window,
-        divided by mask_ref and clipped. Replicate-padded for the same
-        reason as _edge_stat (no spurious border response).
+        Per-pixel mask in [mask_floor, 1], shape (1,H,W): the local std of the gray image
+        (Gaussian window) divided by mask_ref. Replicate padding for the same reason as above.
         """
         gray = img.mean(dim=0, keepdim=True).unsqueeze(0)  # (1,1,H,W)
         p = self.mask_window // 2
@@ -237,20 +154,27 @@ class AdaptiveHybridAttack:
         local_std = (mu_sq - mu ** 2).clamp_min(0).sqrt().squeeze(0)
         return (local_std / self.mask_ref).clamp(self.mask_floor, 1.0)
 
-    # ---------------------------------------------------------------- #
-    #  Attack interface (matches BlendAttack / SIGAttack / WaNetAttack)
-    # ---------------------------------------------------------------- #
+    # --- same interface as the other attacks ---
+
     def poison(self, img: torch.Tensor) -> torch.Tensor:
+        return self.poison_components(img, spatial=self.mode in ("both", "spatial_only"),
+                                      freq=self.mode in ("both", "freq_only"))
+
+    def poison_components(self, img: torch.Tensor, spatial: bool = True, freq: bool = True) -> torch.Tensor:
+        """
+        Apply the warp and/or the (masked) signal at this image's strengths. evaluate_components.py
+        calls this directly to test one part of the trigger at a time.
+        """
         alpha, beta = self.compute_alpha_beta(img)
         out = img
 
-        if self.mode in ("both", "spatial_only"):
+        if spatial:
             grid = self.identity_grid + alpha * self.noise_grid / self.image_size
             grid = torch.clamp(grid * self.grid_rescale, -1, 1)
             out = F.grid_sample(out.unsqueeze(0), grid, align_corners=True,
                                  mode="bilinear", padding_mode="reflection").squeeze(0)
 
-        if self.mode in ("both", "freq_only"):
+        if freq:
             signal = (beta / 255.0) * self.sig_pattern_unit
             if self.use_texture_mask:
                 signal = signal * self.texture_mask(img)
@@ -260,14 +184,10 @@ class AdaptiveHybridAttack:
 
     def noise_mode(self, img: torch.Tensor) -> torch.Tensor:
         """
-        WaNet-style cover sample: a FRESH random spatial field at a FIXED
-        (non-adaptive) cover strength, no sinusoidal component, label always
-        unchanged. Fixed strength (not alpha(x)) is deliberate: cover
-        samples must not correlate with any per-image statistic, since their
-        only purpose is teaching the model that generic warping alone
-        (independent of image content) does not trigger the backdoor.
-        Only relevant when this attack's spatial component is active
-        ("both" or "spatial_only" mode) -- "freq_only" has no warp to cover.
+        Cover sample: a new random warp at a fixed strength, no signal, label kept.
+        The strength is fixed on purpose. If it followed alpha(x), the cover samples would depend on
+        the image content, but they are only there to teach the model that "some warp" on its own
+        does not mean airplane. Not needed in freq_only mode since there is no warp to cover.
         """
         if self.mode == "freq_only":
             return img
@@ -282,7 +202,7 @@ class AdaptiveHybridAttack:
         return torch.clamp(warped, 0.0, 1.0)
 
     def is_poisonable(self, label: int) -> bool:
-        return True  # dirty-label -- see module docstring for the explicit design rationale
+        return True  # dirty-label, see the top of the file
 
     def get_target_label(self, original_label: int) -> int:
         return self.target_label

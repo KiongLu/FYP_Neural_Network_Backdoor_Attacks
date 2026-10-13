@@ -1,11 +1,12 @@
 """
-Evaluate a trained (possibly backdoored) model on:
-  1. Clean Accuracy (CA)        -- accuracy on the untouched clean test set
-  2. Attack Success Rate (ASR)  -- fraction of triggered non-target samples
-                                    classified as the target label
-  3. SSIM / PSNR                -- stealthiness of the trigger vs. clean images
+Evaluate a trained model:
+  - clean accuracy (CA) on the normal test set
+  - attack success rate (ASR): how many triggered non-airplane test images are classified as airplane
+  - how visible the trigger is: SSIM, PSNR, L2, L-inf and LPIPS between clean and triggered images
 
-Usage:
+The results are also appended to results/summary.csv.
+
+Example:
     python evaluate.py --attack blend --poison_rate 0.05 --checkpoint checkpoints/cifar10_resnet18_blend_pr0.05_final.pt
 """
 
@@ -22,7 +23,7 @@ from datasets.poison_dataset import TestPoisonedDataset, build_attack
 
 
 class CleanCollate:
-    """Module-level (picklable) collate for the clean-test DataLoader."""
+    """Batches the clean test images (a class so it can be pickled for the worker processes)."""
     def __init__(self, normalize, to_tensor):
         self.normalize = normalize
         self.to_tensor = to_tensor
@@ -34,7 +35,7 @@ class CleanCollate:
 
 
 class ASRCollate:
-    """Module-level (picklable) collate for the ASR DataLoader."""
+    """Batches the triggered test images."""
     def __init__(self, normalize):
         self.normalize = normalize
 
@@ -46,13 +47,25 @@ class ASRCollate:
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--attack", type=str, default=cfg.attack_name, choices=["clean", "blend", "sig", "wanet", "blend_sig", "blend_wanet", "sig_wanet", "blend_sig_wanet", "adaptive_hybrid", "adaptive_spatial", "adaptive_freq"])
+    p.add_argument("--attack", type=str, default=cfg.attack_name, choices=["clean", "badnets", "blend", "sig", "wanet", "blend_sig", "blend_wanet", "sig_wanet", "sig_wanet_matched", "blend_sig_wanet", "adaptive_hybrid", "adaptive_spatial", "adaptive_freq"])
     p.add_argument("--poison_rate", type=float, default=cfg.poison_rate)
     p.add_argument("--target_label", type=int, default=cfg.target_label)
     p.add_argument("--checkpoint", type=str, required=True)
     p.add_argument("--sig_dirty_label", action="store_true",
                     help="Evaluate against dirty-label SIG instead of the default clean-label SIG. "
                          "Must match whichever mode the checkpoint was TRAINED with.")
+    p.add_argument("--seed", type=int, default=cfg.seed,
+                    help="Must match the seed the checkpoint was trained with (it fixes the trigger pattern).")
+    p.add_argument("--augment", action="store_true", help="Checkpoint was trained with --augment (label only).")
+    p.add_argument("--augment_mode", choices=["crop_flip", "crop", "flip"], default="crop_flip",
+                    help="Augmentation mode the checkpoint was trained with (label only).")
+    p.add_argument("--model", choices=["resnet18", "vgg16"], default=cfg.model_name,
+                    help="Network architecture of the checkpoint.")
+    p.add_argument("--holdout", type=int, default=0,
+                    help="Checkpoint was trained with --holdout N (label only; evaluation always uses the test set).")
+    p.add_argument("--set", action="append", default=[], metavar="NAME=VALUE",
+                    help="Same config overrides as used in training.")
+    p.add_argument("--tag_suffix", type=str, default="")
     return p.parse_args()
 
 
@@ -75,12 +88,17 @@ def attack_success_rate(model, loader, device):
         imgs, target_labels = imgs.to(device), target_labels.to(device)
         preds = model(imgs).argmax(dim=1)
         acc_meter.update((preds == target_labels).float().mean().item(), imgs.size(0))
-    return acc_meter.avg  # this IS the ASR
+    return acc_meter.avg  # accuracy against the target label = ASR
 
 
-def stealthiness(test_base, cfg, n_samples: int = 200):
-    """Average SSIM / PSNR / L2 / L_inf (and LPIPS if available) between clean and poisoned images."""
-    attack = build_attack(cfg)
+def stealthiness(test_base, cfg, attack, n_samples: int = 200):
+    """
+    Average SSIM, PSNR, L2, L-inf (and LPIPS if it is installed) between clean and triggered images.
+
+    Pass in the attack object that was built right after set_seed, i.e. the trigger the model was
+    trained with. I used to build a new one in here, but by then creating the model had used up
+    random numbers, so anything with a random warp got a different warp field than the trained one.
+    """
     to_tensor = T.ToTensor()
 
     ssim_meter, psnr_meter = AverageMeter(), AverageMeter()
@@ -119,6 +137,13 @@ def main():
     cfg.poison_rate = args.poison_rate
     cfg.target_label = args.target_label
     cfg.sig_clean_label = not args.sig_dirty_label
+    cfg.seed = args.seed
+    cfg.augment = args.augment
+    cfg.augment_mode = args.augment_mode
+    cfg.model_name = args.model
+    cfg.holdout = args.holdout
+    cfg.tag_suffix = args.tag_suffix
+    cfg.apply_overrides(args.set)
 
     set_seed(cfg.seed)
     device = cfg.device
@@ -131,18 +156,18 @@ def main():
 
     test_base = torchvision.datasets.CIFAR10(root=cfg.data_root, train=False, download=True)
 
-    # ---- Clean accuracy loader ----
+    # clean test set
     clean_loader = DataLoader(test_base, batch_size=cfg.batch_size, shuffle=False,
                                num_workers=cfg.num_workers, collate_fn=CleanCollate(normalize, to_tensor))
 
-    # ---- ASR loader ---- (skip for the clean baseline: there's no trigger to test)
+    # triggered test set (not needed for the clean model, which has no trigger)
     asr_loader = None
     if cfg.attack_name != "clean":
         asr_set = TestPoisonedDataset(test_base, cfg)
         asr_loader = DataLoader(asr_set, batch_size=cfg.batch_size, shuffle=False,
                                  num_workers=cfg.num_workers, collate_fn=ASRCollate(normalize))
 
-    # ---- Load model ----
+    # model
     model = get_model(cfg.model_name, cfg.num_classes).to(device)
     load_checkpoint(model, None, args.checkpoint, device)
 
@@ -153,7 +178,7 @@ def main():
         avg_ssim = avg_psnr = avg_l2 = avg_linf = avg_lpips = float("nan")
     else:
         asr = attack_success_rate(model, asr_loader, device)
-        avg_ssim, avg_psnr, avg_l2, avg_linf, avg_lpips = stealthiness(test_base, cfg)
+        avg_ssim, avg_psnr, avg_l2, avg_linf, avg_lpips = stealthiness(test_base, cfg, asr_set.attack)
 
     print(f"\n===== Evaluation Results ({cfg.attack_name}, poison_rate={cfg.poison_rate}) =====")
     print(f"Clean Accuracy (CA):        {ca*100:.2f}%")
@@ -173,8 +198,12 @@ def main():
     logger = CSVLogger(f"{cfg.results_dir}/summary.csv",
                         fieldnames=["attack", "poison_rate", "clean_acc", "asr", "ssim", "psnr",
                                     "l2", "linf", "lpips"])
+    name = cfg.tag().split(f"{cfg.model_name}_", 1)[1].rsplit("_pr", 1)[0].replace("sig_clean", "sig").replace("sig_dirty", "sig")
+    if cfg.model_name != "resnet18":          # e.g. "vgg16_sig_wanet", so the ResNet-18 rows keep their names
+        name = f"{cfg.model_name}_{name}"
     logger.log({
-        "attack": cfg.attack_name, "poison_rate": cfg.poison_rate,
+        "attack": name,
+        "poison_rate": cfg.poison_rate,
         "clean_acc": ca, "asr": asr, "ssim": avg_ssim, "psnr": avg_psnr,
         "l2": avg_l2, "linf": avg_linf, "lpips": avg_lpips if avg_lpips is not None else "",
     })

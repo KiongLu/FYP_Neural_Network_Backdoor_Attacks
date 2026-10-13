@@ -1,11 +1,9 @@
 """
-Recompute the calibration constants used by AdaptiveHybridAttack
-(adaptive_v_min/max, adaptive_e_min/max in config.py) from the ACTUAL
-training set (5th/95th percentiles over 2,000 random training images).
+Work out the calibration range for the adaptive attack (adaptive_v_min/max and adaptive_e_min/max
+in config.py): the 5th and 95th percentile of each image statistic over 2,000 random training images.
 
-The values in config.py were produced by this script for CIFAR-10. Re-run it
-if you switch dataset (e.g. to GTSRB) and copy the printed numbers into
-config.py before running experiments with the adaptive attack.
+The numbers in config.py came from running this on CIFAR-10. If you use another dataset, run it
+again and copy the printed values into config.py.
 
 Usage:
     python calibrate_adaptive_stats.py
@@ -24,8 +22,8 @@ def main():
     to_tensor = T.ToTensor()
     train_base = torchvision.datasets.CIFAR10(root=cfg.data_root, train=True, download=True)
 
-    # Dummy bounds -- not used for calibration itself, just needed to construct the object
-    # so we can reuse its exact statistic functions (single source of truth).
+    # the bounds don't matter here - I only build the attack to reuse its statistic functions,
+    # so the calibration uses exactly the same code as the attack
     cfg.attack_name = "adaptive_hybrid"
     cfg.adaptive_v_min, cfg.adaptive_v_max = 0.0, 1.0
     cfg.adaptive_e_min, cfg.adaptive_e_max = 0.0, 1.0

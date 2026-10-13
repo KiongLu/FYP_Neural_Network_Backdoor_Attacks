@@ -1,9 +1,5 @@
 """
-Utility functions shared across the project:
-- reproducibility
-- stealthiness metrics (SSIM / PSNR)
-- checkpoint save/load
-- simple CSV logger
+Small helpers used everywhere: seeding, the image-quality metrics, checkpoints and logging.
 """
 
 import os
@@ -22,13 +18,10 @@ def set_seed(seed: int):
     torch.backends.cudnn.benchmark = False
 
 
-# ------------------------------------------------------------------ #
-#  Stealthiness metrics
-# ------------------------------------------------------------------ #
+# --- image-quality metrics (all on images in [0, 1]) ---
+
 def psnr(img1: torch.Tensor, img2: torch.Tensor, max_val: float = 1.0) -> float:
-    """
-    img1, img2: tensors in [0, 1], shape (C, H, W) or (N, C, H, W)
-    """
+    """PSNR in dB. img1, img2: (C, H, W) or (N, C, H, W)."""
     mse = torch.mean((img1 - img2) ** 2).item()
     if mse == 0:
         return float("inf")
@@ -37,21 +30,16 @@ def psnr(img1: torch.Tensor, img2: torch.Tensor, max_val: float = 1.0) -> float:
 
 def l2_norm(img1: torch.Tensor, img2: torch.Tensor) -> float:
     """
-    Mean per-pixel L2 (Euclidean) distance between two images, in [0,1] pixel
-    space. Useful as a simple, model-free, units-interpretable measure of
-    total perturbation magnitude -- complements SSIM/PSNR (which are
-    perceptually-weighted) with a raw, unweighted distance.
+    Euclidean norm of the whole difference (all 3 x 32 x 32 values), i.e. the total size of the
+    perturbation. Unlike SSIM/PSNR it is just a raw distance.
     """
     return torch.norm((img1 - img2).flatten(), p=2).item()
 
 
 def linf_norm(img1: torch.Tensor, img2: torch.Tensor) -> float:
     """
-    L-infinity (max absolute per-pixel-channel) distance between two images,
-    in [0,1] pixel space. Useful because it captures the WORST-CASE single
-    pixel change, which SSIM/PSNR/L2 (all averages) can hide -- a trigger
-    that is subtle on average but has a few very bright/dark pixels will
-    show a high L_inf despite good SSIM/PSNR/L2.
+    Largest change to any single pixel value. The other metrics are averages, so a trigger that is
+    faint overall but changes a few pixels a lot only shows up here.
     """
     return torch.max(torch.abs(img1 - img2)).item()
 
@@ -62,15 +50,11 @@ _lpips_available = None
 
 def lpips_distance(img1: torch.Tensor, img2: torch.Tensor):
     """
-    Optional: Learned Perceptual Image Patch Similarity (Zhang et al., CVPR
-    2018), using the `lpips` pip package if installed. Returns None (not 0.0)
-    if the package/weights aren't available, so callers can distinguish
-    "not computed" from "zero distance". LPIPS correlates better with human
-    perceptual similarity judgements than SSIM/PSNR/L2/L_inf, at the cost of
-    needing a pretrained network (extra dependency + one-time weight
-    download, hence optional rather than required).
+    LPIPS (Zhang et al., 2018) with the AlexNet backbone, from the lpips package. It is closer to
+    what people actually notice than the pixel metrics, but needs a pretrained network, so it is
+    optional: if lpips isn't installed this returns None (not 0) and evaluate.py prints N/A.
 
-    img1, img2: (C,H,W) tensors in [0,1].
+    img1, img2: (C, H, W)
     """
     global _lpips_model, _lpips_available
     if _lpips_available is False:
@@ -85,7 +69,7 @@ def lpips_distance(img1: torch.Tensor, img2: torch.Tensor):
             _lpips_available = False
             return None
     with torch.no_grad():
-        # lpips expects inputs in [-1, 1]
+        # lpips wants inputs in [-1, 1]
         a = (img1.unsqueeze(0) * 2 - 1)
         b = (img2.unsqueeze(0) * 2 - 1)
         return _lpips_model(a, b).item()
@@ -100,8 +84,8 @@ def _gaussian_window(window_size=11, sigma=1.5):
 
 def ssim(img1: torch.Tensor, img2: torch.Tensor, window_size: int = 11) -> float:
     """
-    Simple single/batch-image SSIM implementation.
-    img1, img2: (N, C, H, W) or (C, H, W) tensors in [0, 1]
+    SSIM with an 11x11 Gaussian window (sigma 1.5), computed per colour channel and averaged.
+    img1, img2: (N, C, H, W) or (C, H, W)
     """
     if img1.dim() == 3:
         img1 = img1.unsqueeze(0)
@@ -130,9 +114,8 @@ def ssim(img1: torch.Tensor, img2: torch.Tensor, window_size: int = 11) -> float
     return ssim_map.mean().item()
 
 
-# ------------------------------------------------------------------ #
-#  Checkpointing
-# ------------------------------------------------------------------ #
+# --- checkpoints ---
+
 def save_checkpoint(model, optimizer, epoch, path):
     torch.save(
         {"epoch": epoch, "model_state": model.state_dict(), "optim_state": optimizer.state_dict()},
@@ -148,10 +131,11 @@ def load_checkpoint(model, optimizer, path, device):
     return ckpt.get("epoch", 0)
 
 
-# ------------------------------------------------------------------ #
-#  Logging
-# ------------------------------------------------------------------ #
+# --- logging ---
+
 class CSVLogger:
+    """Appends rows to a CSV file (writes the header the first time)."""
+
     def __init__(self, path, fieldnames):
         self.path = path
         self.fieldnames = fieldnames

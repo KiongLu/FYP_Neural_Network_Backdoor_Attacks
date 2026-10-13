@@ -1,0 +1,9 @@
+attack,trained_on_it,known_singles,leave_one_out,known_singles_seen
+Blend,0.999318,0.93807625,0.601489125,True
+SIG (dirty-label),0.9988855,0.8856785,0.9250685,True
+WaNet,0.88908075,0.73750625,0.6139265,True
+Blend+SIG+WaNet,0.87945975,0.8420395,0.8647555,False
+SIG+WaNet (Fixed),0.95770125,0.865091,0.90467575,False
+"SIG+WaNet (Fixed, matched)",0.96070375,0.84666125,0.88963875,False
+Adaptive v1,0.998439,0.93608925,0.968642,False
+Adaptive v2,0.97830625,0.85205725,0.8996425,False

@@ -1,14 +1,10 @@
 """
-Wraps a clean torchvision dataset (CIFAR-10 / GTSRB) and applies a chosen
-backdoor attack to a subset of samples at a given poisoning rate.
+Dataset wrappers that apply a backdoor attack on the fly.
 
-Two dataset classes are exposed:
-  - PoisonedDataset:  used for TRAINING (mixes clean + poisoned samples)
-  - TestPoisonedDataset: used for EVALUATING Attack Success Rate
-                          (poisons every non-target-label sample; labels are
-                          NOT changed, so you compare predictions to the fixed
-                          target label yourself, or use `poison_all=True` mode
-                          which returns (poisoned_img, target_label) pairs)
+- PoisonedDataset: the training set, with a fraction of the images poisoned (plus cover samples for
+  the attacks that use a warp)
+- TestPoisonedDataset: every test image that isn't already the target class, with the trigger
+  applied and the target label returned - used to measure the ASR
 """
 
 import random
@@ -21,6 +17,7 @@ from attacks.blend import BlendAttack
 from attacks.sig import SIGAttack
 from attacks.wanet import WaNetAttack
 from attacks.clean import NullAttack
+from attacks.badnets import BadNetsAttack
 from attacks.hybrid import HybridAttack, HYBRID_COMPONENTS, get_components
 from attacks.adaptive_hybrid import AdaptiveHybridAttack
 
@@ -35,32 +32,52 @@ def build_attack(cfg):
         return SIGAttack(cfg.image_size, cfg.sig_delta, cfg.sig_freq, cfg.target_label,
                           clean_label=cfg.sig_clean_label)
     elif name == "wanet":
-        # NOTE: always build WaNet on CPU, even if cfg.device is "cuda". This
-        # attack is applied inside Dataset.__getitem__, which runs in separate
-        # DataLoader worker PROCESSES (not the main training process) when
-        # num_workers > 0. Moving tensors to the GPU inside a worker process
-        # causes device-mismatch crashes when the batch is later collated
-        # (some images on cuda:0, some still on cpu) and is generally
-        # unsupported/unstable with multiprocessing DataLoaders anyway. The
-        # GPU is only used later, in the training loop, after the whole batch
-        # has been assembled on CPU.
+        # Keep WaNet on the CPU even when training on the GPU. The poisoning runs inside the
+        # DataLoader worker processes, and putting some images on the GPU there made batching
+        # crash with device mismatches. The batch is moved to the GPU later in the training loop.
         return WaNetAttack(cfg.image_size, cfg.wanet_s, cfg.wanet_k, cfg.wanet_grid_rescale,
                             cfg.target_label, device="cpu")
+    elif name == "badnets":
+        # only used as a sanity check for the defences
+        return BadNetsAttack(cfg.image_size, target_label=cfg.target_label)
+    elif name == "sig_wanet_matched":
+        # matched baseline: fixed strengths from config.py instead of 1/N
+        return HybridAttack(cfg, HYBRID_COMPONENTS[name],
+                            strengths={"sig": cfg.sig_wanet_matched_delta, "wanet": cfg.sig_wanet_matched_s})
     elif name in HYBRID_COMPONENTS:
         return HybridAttack(cfg, HYBRID_COMPONENTS[name])
     elif name in AdaptiveHybridAttack.MODES:
-        # Same CPU-only reasoning as WaNet above applies here too.
+        # runs on the CPU too, for the same reason as WaNet
         return AdaptiveHybridAttack(cfg, mode=AdaptiveHybridAttack.MODES[name])
     else:
         raise ValueError(f"Unknown attack: {cfg.attack_name}")
 
 
+class IndexedSubset(Dataset):
+    """Part of a torchvision dataset. Keeps a .targets list because PoisonedDataset needs it."""
+
+    def __init__(self, base, indices):
+        self.base, self.indices = base, list(indices)
+        self.targets = [base.targets[i] for i in self.indices]
+
+    def __len__(self):
+        return len(self.indices)
+
+    def __getitem__(self, k):
+        return self.base[self.indices[k]]
+
+
+def split_holdout(base, n_holdout, seed=12345):
+    """
+    Split the training set into (train, validation). It has its own fixed seed, so train.py --holdout
+    and select_adaptive_params.py always get the same validation images.
+    """
+    perm = np.random.RandomState(seed).permutation(len(base))
+    return IndexedSubset(base, sorted(perm[n_holdout:])), IndexedSubset(base, sorted(perm[:n_holdout]))
+
+
 def _get_labels(base_dataset):
-    """
-    Return a plain list of integer labels for the whole dataset without
-    decoding every image (torchvision CIFAR10/GTSRB expose .targets or
-    .labels directly; fall back to indexing if not available).
-    """
+    """All labels as a list, without loading every image if the dataset already has them."""
     if hasattr(base_dataset, "targets"):
         return list(base_dataset.targets)
     if hasattr(base_dataset, "labels"):
@@ -70,32 +87,20 @@ def _get_labels(base_dataset):
 
 class PoisonedDataset(Dataset):
     """
-    TRAIN-time wrapper. Randomly selects `poison_rate` fraction of the dataset
-    to poison. For WaNet, an additional `cross_ratio * poison_rate` fraction is
-    put into "noise mode" (covered samples) as required by the original paper.
+    Training set with poison_rate x (number of images) images poisoned. For the attacks with a warp,
+    another cross_ratio x that number become cover samples (random warp, label kept), as in WaNet.
 
-    IMPORTANT (clean-label SIG): when cfg.sig_clean_label is True, poisoning
-    candidates are drawn ONLY from samples that already belong to the target
-    class, since clean-label SIG never flips labels. The NUMBER of poisoned
-    samples is still `poison_rate` x the whole dataset size (same as every
-    other attack), e.g. 0.01 -> 500 images, all taken from the ~5,000
-    CIFAR-10 "airplane" training images (10% of that class), capped at the
-    class size. Drawing candidates from the target class only means every
-    selected candidate is actually poisoned, rather than most of them landing
-    outside the target class and being skipped by the clean-label rule.
-    When cfg.sig_clean_label is False (or for any other attack), candidates
-    are drawn from the whole dataset and labels are flipped, same as
-    Blend/WaNet. The adaptive_hybrid/adaptive_spatial/adaptive_freq attacks
-    (attacks/adaptive_hybrid.py) are always dirty-label -- see that module's
-    docstring for the explicit rationale -- and generate WaNet-style cover
-    samples whenever their spatial component is active.
+    Clean-label SIG is the special case: the poisoned images are picked only from the target class
+    and keep their labels. The count is still poison_rate x the whole training set, e.g. 500 at 1%,
+    which is 10% of the 5,000 airplanes. Picking only from airplanes means every chosen image really
+    gets poisoned. Every other attack picks from the whole training set and changes the label.
     """
 
     def __init__(self, base_dataset, cfg, train: bool = True):
         self.base = base_dataset
         self.cfg = cfg
         self.attack_name = cfg.attack_name.lower()
-        self.components = get_components(self.attack_name)  # e.g. ["blend","sig"] for "blend_sig"
+        self.components = get_components(self.attack_name)  # e.g. ["blend", "sig"] for "blend_sig"
         self.attack = build_attack(cfg)
         self.to_tensor = T.ToTensor()
         self.train = train
@@ -105,7 +110,6 @@ class PoisonedDataset(Dataset):
 
         sig_is_clean_label = self.attack_name == "sig" and cfg.sig_clean_label
         if sig_is_clean_label:
-            # Clean-label: only pick candidates from the target class itself.
             labels = _get_labels(base_dataset)
             candidate_pool = [i for i in indices if labels[i] == cfg.target_label]
         else:
@@ -120,6 +124,7 @@ class PoisonedDataset(Dataset):
 
         self.poison_indices = set(candidate_pool[:n_poison])
 
+        # cover samples, for every attack that has a warp in it
         self.noise_indices = set()
         needs_cover_samples = ("wanet" in self.components) or (
             self.attack_name in AdaptiveHybridAttack.MODES
@@ -135,7 +140,6 @@ class PoisonedDataset(Dataset):
         return len(self.base)
 
     def _to_tensor01(self, img) -> torch.Tensor:
-        # img may be a PIL Image (from torchvision dataset) already, or a tensor
         if not torch.is_tensor(img):
             img = self.to_tensor(img)
         return img
@@ -146,27 +150,24 @@ class PoisonedDataset(Dataset):
         actually_poisoned = False
 
         if idx in self.poison_indices:
-            # Safety check: with the target-class-only candidate pool above this
-            # should always be poisonable for clean-label SIG, but keep the
-            # guard in case poison_rate/target_label change after construction.
+            # Shouldn't happen given how clean-label SIG picks its images above, but just in case
+            # the settings are changed after the dataset is built.
             if self.attack_name == "sig" and not self.attack.is_poisonable(label):
-                pass  # leave clean
+                pass
             else:
                 img = self.attack.poison(img)
                 label = self.attack.get_target_label(label)
                 actually_poisoned = True
         elif idx in self.noise_indices:
-            img = self.attack.noise_mode(img)  # WaNet cover sample, label unchanged
+            img = self.attack.noise_mode(img)  # cover sample, label stays the same
 
         return img, label, int(actually_poisoned)
 
 
 class TestPoisonedDataset(Dataset):
     """
-    TEST-time wrapper used to measure Attack Success Rate (ASR).
-    Poisons every sample (that isn't already the target class) and
-    returns (poisoned_img, target_label). Feed this through the model and
-    compute accuracy against `target_label` to get ASR.
+    For measuring ASR: every test image that isn't already the target class, with the trigger
+    applied. Returns (poisoned image, target label), so ASR is just the accuracy on this set.
     """
 
     def __init__(self, base_dataset, cfg):
@@ -176,7 +177,7 @@ class TestPoisonedDataset(Dataset):
         self.to_tensor = T.ToTensor()
         self.target_label = cfg.target_label
 
-        # exclude samples that already belong to the target class
+        # images that are already airplanes would count as a success anyway, so leave them out
         self.eval_indices = [i for i in range(len(base_dataset)) if base_dataset[i][1] != cfg.target_label]
 
     def __len__(self):

@@ -11,16 +11,31 @@ FYP/
 │   ├── wanet.py                # Warping-based invisible attack (Nguyen & Tran, ICLR 2021)
 │   │                            # — dirty-label
 │   ├── clean.py                  # No-op attack, used for the clean baseline model
+│   ├── badnets.py                # 3x3 patch attack, ONLY a positive control for the defences
 │   ├── hybrid.py                   # Fixed-strength hybrids: combines 2-3 of the above,
-│   │                                # each at 1/N intensity. Always dirty-label.
+│   │                                # each at 1/N intensity (or, for the budget-matched
+│   │                                # SIG+WaNet baseline, fixed absolute strengths).
+│   │                                # Always dirty-label.
 │   └── adaptive_hybrid.py            # PROPOSED/EXPERIMENTAL: SIG+WaNet hybrid with
 │                                       # per-image ADAPTIVE trigger strength (see below)
 ├── datasets/
 │   └── poison_dataset.py       # Poisoned dataset wrappers (train / test / ASR eval)
 ├── models/
-│   └── resnet.py                 # CIFAR-style ResNet-18
+│   ├── resnet.py                 # CIFAR-style ResNet-18 (+ get_model)
+│   └── vgg.py                    # CIFAR-style VGG-16 with batch norm (--model vgg16)
 ├── train.py                        # Training loop (all attacks, all toggles)
 ├── evaluate.py                       # CA / ASR / SSIM / PSNR / L2 / L_inf / (LPIPS) evaluation
+├── evaluate_components.py            # Test-time ASR with only the SIG or only the warp
+│                                     # component of a trained SIG+WaNet model
+├── defenses/
+│   ├── strip.py                      # STRIP entropy detection + AUROC / FAR@1%FRR
+│   ├── gradcam.py                    # Grad-CAM for the ResNet-18 (+ map spread)
+│   ├── spectral.py                   # Spectral Signatures + Activation Clustering
+│   ├── frequency.py                  # DCT energy concentration + DCT-based detector
+│   ├── neural_cleanse.py             # Neural Cleanse trigger reverse-engineering + anomaly index
+│   └── fine_pruning.py               # Fine-Pruning (prune dormant layer4 channels + fine-tune)
+├── select_adaptive_params.py         # Picks the Adaptive v2 setting on a held-out
+│                                     # validation split (needs the --holdout runs)
 ├── inspect_poison.py                   # Visualize which TRAINING samples got poisoned
 ├── inspect_evaluation.py                 # Visualize ASR TEST samples + model predictions
 ├── calibrate_adaptive_stats.py             # Recompute Adaptive Hybrid's calibration bounds
@@ -28,8 +43,9 @@ FYP/
 ├── config.py                                # Central experiment configuration
 ├── utils.py                                   # Seeding, metrics, checkpointing, logging
 └── notebooks/
-    ├── data_exploration.ipynb
-    └── result_visualization.ipynb
+    ├── data_exploration.ipynb       # triggers, Adaptive Hybrid behaviour, per-image stealth
+    ├── result_visualization.ipynb   # all result figures (incl. component ablation)
+    └── defense_analysis.ipynb       # STRIP, Grad-CAM, data-level and DCT analyses (1% models)
 ```
 
 ## Setup
@@ -41,9 +57,15 @@ make sure you're using a CUDA-enabled PyTorch build if you have a GPU (see
 `nvidia-smi` to check your CUDA version, then install from
 https://pytorch.org/get-started/locally/ with the matching `--index-url`).
 
-For the Blend attack, drop any RGB image at `./triggers/hello_kitty.png`
-(or update `cfg.blend_trigger_path`). If the file is missing, a fixed
-pseudo-random static trigger is used instead so the code still runs.
+**Blend trigger image (not included).** The Blend attack blends a trigger image into the poisoned
+images. The results in the report used a cartoon image (`triggers/hello_kitty.png`), which is not in
+this repository because of copyright. To run Blend, put any RGB image at `./triggers/hello_kitty.png`
+(or change `blend_trigger_path` in `config.py`); it is resized to 32x32. Without an image, the code
+prints a warning and uses a fixed random-noise trigger instead, so everything still runs.
+
+Because the trigger is different, Blend and the hybrids that contain it (Blend+SIG, Blend+WaNet,
+Blend+SIG+WaNet) will not reproduce the exact numbers in the report. Every other attack (SIG, WaNet,
+SIG+WaNet, the matched baseline and the adaptive attacks) does not use the image and is unaffected.
 
 LPIPS (optional stealthiness metric) requires `pip install lpips`; if not
 installed, `evaluate.py` reports it as N/A rather than failing.
@@ -121,6 +143,62 @@ table that matches the report; `notebooks/result_visualization.ipynb` reads it (
 cross-checks it against `summary.csv`), and `notebooks/data_exploration.ipynb` visualises the
 triggers. Both notebooks save their figures to `results/figures/`.
 
+Train the **budget-matched Fixed SIG+WaNet baseline**: the same fixed, non-adaptive
+hybrid with each component at Adaptive v2's *average* strength (warp 0.27, signal
+amplitude 10.6; `sig_wanet_matched_*` in `config.py`). It separates the effect of the
+adaptive strengths and texture mask from the effect of moving budget from the warp
+to the signal:
+```bash
+python train.py --attack sig_wanet_matched --poison_rate 0.01
+```
+
+Which trigger component does each trained SIG+WaNet model rely on? Re-measure the ASR
+at test time with only the SIG or only the warp component (no retraining):
+```bash
+python evaluate_components.py          # writes results/component_asr.csv
+```
+
+Defence analyses on the 1% models (STRIP, Grad-CAM, Spectral Signatures, Activation
+Clustering, a DCT frequency-domain detector tested on seen and unseen triggers, Neural Cleanse
+and Fine-Pruning; the last two also on the SIG+WaNet variants at 0.5% and 5%): run
+`notebooks/defense_analysis.ipynb`. It writes `results/strip_results.csv`,
+`results/gradcam_results.csv`, `results/data_level_results.csv`, `results/frequency_results.csv`,
+`results/frequency_unseen_results.csv`, `results/neural_cleanse_results.csv`,
+`results/fine_pruning_results.csv` and figures in `results/figures/`. It needs the BadNets
+positive-control model:
+```bash
+python train.py --attack badnets --poison_rate 0.01
+```
+
+### Run variants (seeds, augmentation, validation split, config overrides)
+
+All of these are off by default, and each one only adds a suffix to the checkpoint/log name
+when it is used, so the default runs keep their original names. `evaluate.py` takes the
+same options and must be given the ones the checkpoint was trained with.
+```bash
+# another random seed (changes the poisoned images AND the trigger pattern) -> ..._s1_pr0.01
+python train.py --attack sig_wanet --poison_rate 0.01 --seed 1
+python evaluate.py --attack sig_wanet --poison_rate 0.01 --seed 1     --checkpoint checkpoints/cifar10_resnet18_sig_wanet_s1_pr0.01_final.pt
+
+# standard augmentation (random crop with 4-px padding + horizontal flip, after poisoning) -> ..._aug_
+python train.py --attack wanet --poison_rate 0.01 --augment
+# only one of the two augmentations -> ..._augcrop_ / ..._augflip_
+python train.py --attack wanet --poison_rate 0.01 --augment --augment_mode crop
+
+# another architecture -> cifar10_vgg16_...
+python train.py --attack adaptive_hybrid --poison_rate 0.01 --model vgg16
+
+# keep 5,000 training images aside as a validation set -> ..._val5000_
+python train.py --attack adaptive_hybrid --poison_rate 0.005 --holdout 5000 --tag_suffix _candC1
+
+# override any config.py setting for one run (e.g. a candidate parameter setting)
+python train.py --attack adaptive_hybrid --poison_rate 0.005 --holdout 5000 --tag_suffix _candC2     --set adaptive_hybrid_beta_min=12.0 --set adaptive_hybrid_beta_max=20.0
+
+# then choose the Adaptive v2 setting on the validation images (writes results/validation_selection.csv)
+python select_adaptive_params.py
+```
+`--save_every N` saves an intermediate checkpoint every N epochs (default 20; 0 = final only).
+
 Visualize what actually happened:
 ```bash
 # Which training images got poisoned, and what did their labels become?
@@ -150,6 +228,7 @@ python inspect_evaluation.py --attack wanet --poison_rate 0.01 \
 | Attack | Purpose |
 |--------|---------|
 | Fixed SIG+WaNet | Baseline for the adaptive comparison |
+| Fixed SIG+WaNet (matched) | Fixed baseline at Adaptive v2's average strengths — is the gain from adaptivity or from the budget split? |
 | Adaptive SIG+WaNet | The proposed method — does adaptive strength beat fixed strength? |
 | Adaptive spatial-only / Adaptive freq-only | Ablation — which component's adaptivity (if either) drives any observed benefit? |
 

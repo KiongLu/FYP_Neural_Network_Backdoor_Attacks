@@ -1,0 +1,5 @@
+candidate,checkpoint,val_ca,val_asr,val_ssim,val_psnr,selected
+Fixed SIG+WaNet,cifar10_resnet18_sig_wanet_val5000_pr0.005_final.pt,0.873199999332428,0.8871396780014038,0.9429893961548805,29.62080735978656,False
+Candidate A (first attempt),cifar10_resnet18_adaptive_hybrid_val5000_candA_pr0.005_final.pt,0.8614000082015991,0.8104212880134583,0.9653892958164215,30.423920265159452,False
+Candidate C1 (current v2),cifar10_resnet18_adaptive_hybrid_val5000_candC1_pr0.005_final.pt,0.8715999722480774,0.9086474776268005,0.9518459390997887,29.84642362522834,True
+Candidate C2,cifar10_resnet18_adaptive_hybrid_val5000_candC2_pr0.005_final.pt,0.8712000250816345,0.9270510077476501,0.9507802343964576,29.4415792273806,False

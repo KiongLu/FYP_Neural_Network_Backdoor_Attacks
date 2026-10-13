@@ -1,5 +1,5 @@
 """
-Inspect which training samples were poisoned by a given attack config.
+Show which training images get poisoned for a given attack, and what they look like.
 
 Usage:
     python inspect_poison.py --attack blend --poison_rate 0.05
@@ -10,15 +10,18 @@ import torchvision
 import matplotlib.pyplot as plt
 
 from config import cfg
+from utils import set_seed
 from datasets.poison_dataset import PoisonedDataset
 
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--attack", type=str, default=cfg.attack_name, choices=["clean", "blend", "sig", "wanet", "blend_sig", "blend_wanet", "sig_wanet", "blend_sig_wanet", "adaptive_hybrid", "adaptive_spatial", "adaptive_freq"])
+    p.add_argument("--attack", type=str, default=cfg.attack_name, choices=["clean", "blend", "sig", "wanet", "blend_sig", "blend_wanet", "sig_wanet", "sig_wanet_matched", "blend_sig_wanet", "adaptive_hybrid", "adaptive_spatial", "adaptive_freq"])
     p.add_argument("--poison_rate", type=float, default=cfg.poison_rate)
     p.add_argument("--n_show", type=int, default=6, help="how many poisoned samples to visualize")
     p.add_argument("--sig_dirty_label", action="store_true")
+    p.add_argument("--seed", type=int, default=cfg.seed,
+                   help="Training seed (fixes which images are poisoned and the trigger, as in train.py).")
     return p.parse_args()
 
 
@@ -32,6 +35,8 @@ def main():
     cfg.poison_rate = args.poison_rate
     cfg.sig_clean_label = not args.sig_dirty_label
 
+    cfg.seed = args.seed
+    set_seed(cfg.seed)              # same order as train.py: seed, then build the poisoned dataset
     train_base = torchvision.datasets.CIFAR10(root=cfg.data_root, train=True, download=True)
     train_set = PoisonedDataset(train_base, cfg, train=True)
 
@@ -44,14 +49,14 @@ def main():
 
     print(f"\nFirst 10 poisoned indices: {poison_idx[:10]}")
 
-    # Show original label -> target label for a few poisoned samples
+    # original label -> label used for training, for a few poisoned images
     print("\nSample | original_label -> new_label | is_poison")
     for i in poison_idx[:10]:
         orig_img, orig_label = train_base[i]
         _, new_label, is_poison = train_set[i]
         print(f"  idx {i:5d} | {CIFAR10_CLASSES[orig_label]:>10s} -> {CIFAR10_CLASSES[new_label]:<10s} | {is_poison}")
 
-    # Visualize a handful: clean vs poisoned side by side
+    # a few clean vs poisoned images side by side
     n = min(args.n_show, len(poison_idx))
     fig, axes = plt.subplots(n, 2, figsize=(4, 2 * n))
     if n == 1:

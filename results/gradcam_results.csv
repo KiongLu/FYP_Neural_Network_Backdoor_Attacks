@@ -1,0 +1,3 @@
+model,cam_spread_clean_inputs,cam_spread_triggered_inputs,asr_before_occlusion,asr_after_occlusion
+SIG+WaNet (Fixed),0.5866875,0.51159765625,0.9559999704360962,0.765999972820282
+Adaptive v2,0.61984375,0.48269921875,0.9739999771118164,0.6359999775886536

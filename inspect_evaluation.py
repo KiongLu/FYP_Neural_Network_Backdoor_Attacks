@@ -1,19 +1,14 @@
 """
-Visualize exactly which images evaluate.py uses when computing the Attack
-Success Rate (ASR), and — if you give it a trained checkpoint — show what
-the model actually predicts for each one (success = trigger fooled the
-model into predicting the target label; fail = it didn't).
-
-This uses the SAME TestPoisonedDataset class that evaluate.py's ASR
-calculation runs on, so what you see here is exactly what's being measured.
+Show the test images evaluate.py uses for the ASR (non-airplane images with the trigger) and, if a
+checkpoint is given, what the model predicts for each of them - green if the trigger worked, red if
+it didn't. It uses the same TestPoisonedDataset as evaluate.py.
 
 Usage:
-    # Just look at the poisoned test images (no model needed)
+    # only the triggered images
     python inspect_evaluation.py --attack wanet --poison_rate 0.01
 
-    # Also show the model's predictions and mark success/fail per image
-    python inspect_evaluation.py --attack wanet --poison_rate 0.01 \
-        --checkpoint checkpoints/cifar10_resnet18_wanet_pr0.01_final.pt
+    # with the model's predictions
+    python inspect_evaluation.py --attack wanet --poison_rate 0.01         --checkpoint checkpoints/cifar10_resnet18_wanet_pr0.01_final.pt
 """
 
 import argparse
@@ -36,7 +31,7 @@ def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--attack", type=str, default=cfg.attack_name,
                     choices=["blend", "sig", "wanet", "blend_sig", "blend_wanet",
-                             "sig_wanet", "blend_sig_wanet",
+                             "sig_wanet", "sig_wanet_matched", "blend_sig_wanet",
                              "adaptive_hybrid", "adaptive_spatial", "adaptive_freq"])
     p.add_argument("--poison_rate", type=float, default=cfg.poison_rate)
     p.add_argument("--target_label", type=int, default=cfg.target_label)
@@ -46,9 +41,9 @@ def parse_args():
                     help="Optional. If given, also runs the model on shown images and marks "
                          "success/fail. If omitted, only the images themselves are shown.")
     p.add_argument("--n_show", type=int, default=8, help="how many ASR test images to visualize")
-    p.add_argument("--seed", type=int, default=None,
-                    help="Optional. Set for a reproducible sample of shown images (e.g. same "
-                         "images every run for consistent report figures).")
+    p.add_argument("--seed", type=int, default=cfg.seed,
+                    help="Training seed of the checkpoint (default: the config seed). It fixes the trigger, so the "
+                         "images shown carry the same trigger the model was trained with.")
     return p.parse_args()
 
 
@@ -59,8 +54,8 @@ def main():
     cfg.target_label = args.target_label
     cfg.sig_clean_label = not args.sig_dirty_label
 
-    if args.seed is not None:
-        set_seed(args.seed)
+    cfg.seed = args.seed
+    set_seed(cfg.seed)              # same seed as training -> same trigger as the trained model
 
     device = cfg.device
     to_tensor = T.ToTensor()
@@ -68,14 +63,13 @@ def main():
 
     test_base = torchvision.datasets.CIFAR10(root=cfg.data_root, train=False, download=True)
 
-    # This is EXACTLY the dataset evaluate.py builds for its ASR calculation:
-    # every test image that is NOT already the target class, with the trigger applied.
+    # the same set evaluate.py uses for the ASR
     asr_set = TestPoisonedDataset(test_base, cfg)
     print(f"Attack: {cfg.attack_name} | poison_rate: {cfg.poison_rate}")
     print(f"Target label: {cfg.target_label} ({CIFAR10_CLASSES[cfg.target_label]})")
     print(f"Total ASR test images (test set minus target-class images): {len(asr_set)}")
 
-    # Load model if a checkpoint was given
+    # load the model if a checkpoint was given
     model = None
     if args.checkpoint:
         model = get_model(cfg.model_name, cfg.num_classes).to(device)
@@ -93,8 +87,7 @@ def main():
     print("-" * 65)
 
     for row in range(n):
-        # asr_set.eval_indices maps position -> original test-set index, so we
-        # can recover the true original label to display alongside.
+        # eval_indices gives the original test-set index, so we can show the true label
         orig_idx = asr_set.eval_indices[row]
         orig_img, orig_label = test_base[orig_idx]
         poisoned_img, target_label = asr_set[row]
