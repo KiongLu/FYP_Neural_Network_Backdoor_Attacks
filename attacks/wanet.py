@@ -4,7 +4,7 @@ added pattern.
 
 - poison mode: always the same warp field, and the label is changed to the target class
 - noise mode (cover samples): a new random warp field every time, label unchanged. These teach the
-  model that only the one specific warp means "airplane", not any warp.
+  model that only the one specific warp means the target class, not any warp.
 """
 
 import torch

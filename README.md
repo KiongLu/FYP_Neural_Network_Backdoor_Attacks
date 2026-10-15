@@ -19,7 +19,8 @@ FYP/
 │   └── adaptive_hybrid.py            # PROPOSED/EXPERIMENTAL: SIG+WaNet hybrid with
 │                                       # per-image ADAPTIVE trigger strength (see below)
 ├── datasets/
-│   └── poison_dataset.py       # Poisoned dataset wrappers (train / test / ASR eval)
+│   ├── poison_dataset.py       # Poisoned dataset wrappers (train / test / ASR eval)
+│   └── gtsrb.py                # GTSRB resized to 32x32 (cached as .npz) + dataset loader
 ├── models/
 │   ├── resnet.py                 # CIFAR-style ResNet-18 (+ get_model)
 │   └── vgg.py                    # CIFAR-style VGG-16 with batch norm (--model vgg16)
@@ -52,7 +53,8 @@ FYP/
 ```bash
 pip install -r requirements.txt
 ```
-CIFAR-10 downloads automatically into `./data` on first run. On Windows,
+CIFAR-10 downloads automatically into `./data` on first run (GTSRB too, when `--dataset gtsrb`
+is used). On Windows,
 make sure you're using a CUDA-enabled PyTorch build if you have a GPU (see
 `nvidia-smi` to check your CUDA version, then install from
 https://pytorch.org/get-started/locally/ with the matching `--index-url`).
@@ -137,8 +139,8 @@ Results append to `results/summary.csv`, ready to be pulled into
 `notebooks/result_visualization.ipynb` for comparison plots across attacks
 and poisoning rates.
 
-`results/summary.csv` is an append-only log (repeated runs, and clean- vs dirty-label SIG
-both logged as `sig`). `results/report_results.csv` is the curated one-row-per-configuration
+`results/summary.csv` is an append-only log (repeated runs; older rows log clean- and dirty-label
+SIG both as `sig`, newer ones as `sig_clean` / `sig_dirty`). `results/report_results.csv` is the curated one-row-per-configuration
 table that matches the report; `notebooks/result_visualization.ipynb` reads it (and
 cross-checks it against `summary.csv`), and `notebooks/data_exploration.ipynb` visualises the
 triggers. Both notebooks save their figures to `results/figures/`.
@@ -164,7 +166,9 @@ and Fine-Pruning; the last two also on the SIG+WaNet variants at 0.5% and 5%): r
 `notebooks/defense_analysis.ipynb`. It writes `results/strip_results.csv`,
 `results/gradcam_results.csv`, `results/data_level_results.csv`, `results/frequency_results.csv`,
 `results/frequency_unseen_results.csv`, `results/neural_cleanse_results.csv`,
-`results/fine_pruning_results.csv` and figures in `results/figures/`. It needs the BadNets
+`results/fine_pruning_results.csv`, the sensitivity checks
+`results/neural_cleanse_l1_all.csv`, `results/neural_cleanse_threshold_sensitivity.csv` and
+`results/fine_pruning_budget_sensitivity.csv`, and figures in `results/figures/`. It needs the BadNets
 positive-control model:
 ```bash
 python train.py --attack badnets --poison_rate 0.01
@@ -178,7 +182,7 @@ same options and must be given the ones the checkpoint was trained with.
 ```bash
 # another random seed (changes the poisoned images AND the trigger pattern) -> ..._s1_pr0.01
 python train.py --attack sig_wanet --poison_rate 0.01 --seed 1
-python evaluate.py --attack sig_wanet --poison_rate 0.01 --seed 1     --checkpoint checkpoints/cifar10_resnet18_sig_wanet_s1_pr0.01_final.pt
+python evaluate.py --attack sig_wanet --poison_rate 0.01 --seed 1 --checkpoint checkpoints/cifar10_resnet18_sig_wanet_s1_pr0.01_final.pt
 
 # standard augmentation (random crop with 4-px padding + horizontal flip, after poisoning) -> ..._aug_
 python train.py --attack wanet --poison_rate 0.01 --augment
@@ -188,16 +192,27 @@ python train.py --attack wanet --poison_rate 0.01 --augment --augment_mode crop
 # another architecture -> cifar10_vgg16_...
 python train.py --attack adaptive_hybrid --poison_rate 0.01 --model vgg16
 
+# another dataset: GTSRB, resized to 32x32 and cached in data/ on first use -> gtsrb_resnet18_...
+# The adaptive attack needs GTSRB's own calibration range (run the calibration script and pass the
+# four printed values with --set, the same in train.py and evaluate.py):
+python calibrate_adaptive_stats.py --dataset gtsrb
+python train.py --dataset gtsrb --attack adaptive_hybrid --poison_rate 0.01 \
+    --set adaptive_v_min=0.0300 --set adaptive_v_max=0.3190 --set adaptive_e_min=0.0771 --set adaptive_e_max=0.8142
+
 # keep 5,000 training images aside as a validation set -> ..._val5000_
 python train.py --attack adaptive_hybrid --poison_rate 0.005 --holdout 5000 --tag_suffix _candC1
 
 # override any config.py setting for one run (e.g. a candidate parameter setting)
-python train.py --attack adaptive_hybrid --poison_rate 0.005 --holdout 5000 --tag_suffix _candC2     --set adaptive_hybrid_beta_min=12.0 --set adaptive_hybrid_beta_max=20.0
+python train.py --attack adaptive_hybrid --poison_rate 0.005 --holdout 5000 --tag_suffix _candC2 --set adaptive_hybrid_beta_min=12.0 --set adaptive_hybrid_beta_max=20.0
 
 # then choose the Adaptive v2 setting on the validation images (writes results/validation_selection.csv)
 python select_adaptive_params.py
 ```
 `--save_every N` saves an intermediate checkpoint every N epochs (default 20; 0 = final only).
+`--epochs` and `--target_label` override `config.py` (defaults 100 and 0). The helper scripts also take
+`--n_show` (`inspect_poison.py` / `inspect_evaluation.py`: how many images to show) and `--rates` / `--out`
+(`evaluate_components.py`: which poisoning rates to test and where to write the CSV). Every script
+prints its full list of options with `--help`.
 
 Visualize what actually happened:
 ```bash
@@ -206,13 +221,12 @@ python inspect_poison.py --attack sig --poison_rate 0.01
 
 # Which test images were used for ASR, and did the trained model actually
 # get fooled by each one? (pass --checkpoint to see model predictions)
-python inspect_evaluation.py --attack wanet --poison_rate 0.01 \
-    --checkpoint checkpoints/cifar10_resnet18_wanet_pr0.01_final.pt
+python inspect_evaluation.py --attack wanet --poison_rate 0.01 --checkpoint checkpoints/cifar10_resnet18_wanet_pr0.01_final.pt
 ```
 
 ## Suggested experiment matrix
 
-**Core comparison** (poison rates 1% / 5% / 10%):
+**Core comparison** (poison rates 0.5% / 1% / 5%):
 
 | Attack | Metric focus |
 |--------|--------------|
@@ -245,7 +259,7 @@ python inspect_evaluation.py --attack wanet --poison_rate 0.01 \
 - WaNet (and the spatial component of the Adaptive Hybrid, when active)
   uses a "noise mode" (`cross_ratio` in `config.py`) — cover samples warped
   with a *different random* field each time, which is what makes it
-  resistant to defenses like Neural Cleanse/STRIP.
+  harder for defences like Neural Cleanse/STRIP to detect.
 - **WaNet must run on CPU inside the DataLoader**, even if you're training
   on GPU — `attacks/wanet.py` and `attacks/adaptive_hybrid.py` are
   hard-coded to `device="cpu"` internally regardless of `cfg.device`. This
@@ -270,8 +284,9 @@ python inspect_evaluation.py --attack wanet --poison_rate 0.01 \
   reproduce them.
 - The Adaptive Hybrid's `adaptive_v_min/max`/`adaptive_e_min/max`
   calibration constants in `config.py` are the values measured by
-  `calibrate_adaptive_stats.py` on CIFAR-10; re-run it if you change dataset.
-- GTSRB support: swap `torchvision.datasets.CIFAR10` for
-  `torchvision.datasets.GTSRB` in `train.py`/`evaluate.py`, update
-  `cfg.num_classes` accordingly, and recalibrate the Adaptive Hybrid's
-  statistics for the new dataset.
+  `calibrate_adaptive_stats.py` on CIFAR-10. For another dataset, re-run it with `--dataset`
+  and pass the printed values with `--set` (see the GTSRB example above).
+- GTSRB is supported through `--dataset gtsrb` in `train.py`, `evaluate.py` and
+  `calibrate_adaptive_stats.py` (43 classes, target class 0 = the 20 km/h sign). The helper
+  scripts (`inspect_poison.py`, `inspect_evaluation.py`, `evaluate_components.py`,
+  `select_adaptive_params.py`) are CIFAR-10 only.

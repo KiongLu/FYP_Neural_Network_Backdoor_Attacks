@@ -1,7 +1,7 @@
 """
 Evaluate a trained model:
   - clean accuracy (CA) on the normal test set
-  - attack success rate (ASR): how many triggered non-airplane test images are classified as airplane
+  - attack success rate (ASR): how many triggered test images from other classes are classified as the target class
   - how visible the trigger is: SSIM, PSNR, L2, L-inf and LPIPS between clean and triggered images
 
 The results are also appended to results/summary.csv.
@@ -20,6 +20,7 @@ from config import cfg
 from utils import set_seed, load_checkpoint, ssim, psnr, l2_norm, linf_norm, lpips_distance, AverageMeter, CSVLogger
 from models.resnet import get_model
 from datasets.poison_dataset import TestPoisonedDataset, build_attack
+from datasets.gtsrb import load_base_datasets
 
 
 class CleanCollate:
@@ -59,6 +60,8 @@ def parse_args():
     p.add_argument("--augment", action="store_true", help="Checkpoint was trained with --augment (label only).")
     p.add_argument("--augment_mode", choices=["crop_flip", "crop", "flip"], default="crop_flip",
                     help="Augmentation mode the checkpoint was trained with (label only).")
+    p.add_argument("--dataset", choices=["cifar10", "gtsrb"], default=cfg.dataset_name,
+                    help="Dataset the checkpoint was trained on.")
     p.add_argument("--model", choices=["resnet18", "vgg16"], default=cfg.model_name,
                     help="Network architecture of the checkpoint.")
     p.add_argument("--holdout", type=int, default=0,
@@ -141,6 +144,7 @@ def main():
     cfg.augment = args.augment
     cfg.augment_mode = args.augment_mode
     cfg.model_name = args.model
+    cfg.set_dataset(args.dataset)
     cfg.holdout = args.holdout
     cfg.tag_suffix = args.tag_suffix
     cfg.apply_overrides(args.set)
@@ -151,10 +155,10 @@ def main():
         mode = "CLEAN-LABEL" if cfg.sig_clean_label else "DIRTY-LABEL"
         print(f"[INFO] SIG mode: {mode}")
 
-    normalize = T.Normalize(mean=[0.4914, 0.4822, 0.4465], std=[0.2470, 0.2435, 0.2616])
+    normalize = T.Normalize(*cfg.NORMALIZATION[cfg.dataset_name])
     to_tensor = T.ToTensor()
 
-    test_base = torchvision.datasets.CIFAR10(root=cfg.data_root, train=False, download=True)
+    _, test_base = load_base_datasets(cfg)
 
     # clean test set
     clean_loader = DataLoader(test_base, batch_size=cfg.batch_size, shuffle=False,
@@ -198,9 +202,12 @@ def main():
     logger = CSVLogger(f"{cfg.results_dir}/summary.csv",
                         fieldnames=["attack", "poison_rate", "clean_acc", "asr", "ssim", "psnr",
                                     "l2", "linf", "lpips"])
-    name = cfg.tag().split(f"{cfg.model_name}_", 1)[1].rsplit("_pr", 1)[0].replace("sig_clean", "sig").replace("sig_dirty", "sig")
+    # e.g. "sig_clean_s1"; older rows in summary.csv log both SIG modes as plain "sig"
+    name = cfg.tag().split(f"{cfg.model_name}_", 1)[1].rsplit("_pr", 1)[0]
     if cfg.model_name != "resnet18":          # e.g. "vgg16_sig_wanet", so the ResNet-18 rows keep their names
         name = f"{cfg.model_name}_{name}"
+    if cfg.dataset_name != "cifar10":         # e.g. "gtsrb_sig_wanet"
+        name = f"{cfg.dataset_name}_{name}"
     logger.log({
         "attack": name,
         "poison_rate": cfg.poison_rate,

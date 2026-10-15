@@ -1,5 +1,5 @@
 """
-Train a model on CIFAR-10 with one of the backdoor attacks applied to part of the training set.
+Train a model on CIFAR-10 or GTSRB with one of the backdoor attacks applied to part of the training set.
 
 Examples:
     python train.py --attack blend --poison_rate 0.05
@@ -20,6 +20,7 @@ from config import cfg
 from utils import set_seed, save_checkpoint, CSVLogger, AverageMeter
 from models.resnet import get_model
 from datasets.poison_dataset import PoisonedDataset, split_holdout
+from datasets.gtsrb import load_base_datasets
 
 
 def parse_args():
@@ -38,6 +39,8 @@ def parse_args():
                     help="Train with random crop (4-px padding) and horizontal flip, applied after poisoning.")
     p.add_argument("--augment_mode", choices=["crop_flip", "crop", "flip"], default="crop_flip",
                     help="Which augmentation --augment applies (non-default modes add '_augcrop' / '_augflip').")
+    p.add_argument("--dataset", choices=["cifar10", "gtsrb"], default=cfg.dataset_name,
+                    help="Dataset (part of the checkpoint name).")
     p.add_argument("--model", choices=["resnet18", "vgg16"], default=cfg.model_name,
                     help="Network architecture (part of the checkpoint name).")
     p.add_argument("--holdout", type=int, default=0,
@@ -87,8 +90,7 @@ class PoisonCollate:
 def get_dataloaders(cfg):
     # The triggers are added to the raw [0, 1] images; normalisation only happens afterwards,
     # in PoisonCollate.
-    train_base = torchvision.datasets.CIFAR10(root=cfg.data_root, train=True, download=True)
-    test_base = torchvision.datasets.CIFAR10(root=cfg.data_root, train=False, download=True)
+    train_base, test_base = load_base_datasets(cfg)
 
     if cfg.holdout:
         train_subset, _ = split_holdout(train_base, cfg.holdout)
@@ -96,7 +98,7 @@ def get_dataloaders(cfg):
     else:
         train_set = PoisonedDataset(train_base, cfg, train=True)
 
-    normalize = T.Normalize(mean=[0.4914, 0.4822, 0.4465], std=[0.2470, 0.2435, 0.2616])
+    normalize = T.Normalize(*cfg.NORMALIZATION[cfg.dataset_name])
     collate = PoisonCollate(normalize, augment=cfg.augment, mode=cfg.augment_mode)
 
     train_loader = DataLoader(train_set, batch_size=cfg.batch_size, shuffle=True,
@@ -135,6 +137,7 @@ def main():
     cfg.augment = args.augment
     cfg.augment_mode = args.augment_mode
     cfg.model_name = args.model
+    cfg.set_dataset(args.dataset)
     cfg.holdout = args.holdout
     cfg.tag_suffix = args.tag_suffix
     cfg.apply_overrides(args.set)

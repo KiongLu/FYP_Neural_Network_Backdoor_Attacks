@@ -1,5 +1,5 @@
 """
-Show the test images evaluate.py uses for the ASR (non-airplane images with the trigger) and, if a
+Show the test images evaluate.py uses for the ASR (images outside the target class, with the trigger) and, if a
 checkpoint is given, what the model predicts for each of them - green if the trigger worked, red if
 it didn't. It uses the same TestPoisonedDataset as evaluate.py.
 
@@ -8,7 +8,7 @@ Usage:
     python inspect_evaluation.py --attack wanet --poison_rate 0.01
 
     # with the model's predictions
-    python inspect_evaluation.py --attack wanet --poison_rate 0.01         --checkpoint checkpoints/cifar10_resnet18_wanet_pr0.01_final.pt
+    python inspect_evaluation.py --attack wanet --poison_rate 0.01 --checkpoint checkpoints/cifar10_resnet18_wanet_pr0.01_final.pt
 """
 
 import argparse

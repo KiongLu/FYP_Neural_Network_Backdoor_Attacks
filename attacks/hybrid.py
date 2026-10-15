@@ -1,10 +1,10 @@
 """
 Fixed hybrid attacks: two or three of Blend, SIG and WaNet combined into one trigger.
 
-Each part is scaled down by 1/N (N = number of parts), so the combined change to the image stays
-about as large as a single attack, but no single trigger is there at full strength.
+Each part is scaled down by 1/N (N = number of parts), so no single trigger is there at full strength
+and the combined change to the image stays no bigger than one attack at full strength.
 
-- Always dirty-label. Clean-label SIG only poisons airplanes, which doesn't fit with Blend and WaNet
+- Always dirty-label. Clean-label SIG only poisons target-class images, which doesn't fit with Blend and WaNet
   poisoning any class, so I kept all hybrids dirty-label.
 - The parts are always applied in the order blend -> sig -> wanet.
 - If WaNet is one of the parts, its cover samples are kept too (at the reduced warp strength).

@@ -91,9 +91,9 @@ class PoisonedDataset(Dataset):
     another cross_ratio x that number become cover samples (random warp, label kept), as in WaNet.
 
     Clean-label SIG is the special case: the poisoned images are picked only from the target class
-    and keep their labels. The count is still poison_rate x the whole training set, e.g. 500 at 1%,
-    which is 10% of the 5,000 airplanes. Picking only from airplanes means every chosen image really
-    gets poisoned. Every other attack picks from the whole training set and changes the label.
+    and keep their labels. The count is still poison_rate x the whole training set, e.g. 500 at 1%
+    on CIFAR-10, which is 10% of the 5,000 airplanes. Picking only from the target class means every
+    chosen image really gets poisoned. Every other attack picks from the whole training set and changes the label.
     """
 
     def __init__(self, base_dataset, cfg, train: bool = True):
@@ -177,7 +177,7 @@ class TestPoisonedDataset(Dataset):
         self.to_tensor = T.ToTensor()
         self.target_label = cfg.target_label
 
-        # images that are already airplanes would count as a success anyway, so leave them out
+        # images that are already in the target class would count as a success anyway, so leave them out
         self.eval_indices = [i for i in range(len(base_dataset)) if base_dataset[i][1] != cfg.target_label]
 
     def __len__(self):

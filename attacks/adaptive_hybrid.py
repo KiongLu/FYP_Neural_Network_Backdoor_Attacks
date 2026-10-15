@@ -27,7 +27,7 @@ regions, where a stripe pattern is easiest to see. The idea comes from perceptua
 watermarking; whether it actually helps here is what the experiments test.
 
 The attack is always dirty-label, like the fixed hybrids: the strengths depend on image content,
-not on the class, so restricting it to airplanes would mix up "clean-label" with "adaptive".
+not on the class, so restricting it to the target class would mix up "clean-label" with "adaptive".
 The full maths is in Appendix A of the report.
 """
 
@@ -77,7 +77,7 @@ class AdaptiveHybridAttack:
         # one warp field for all poisoned images - only its strength changes per image
         self.identity_grid, self.noise_grid = self._make_grids()
 
-        # sine pattern with amplitude 1; beta(x) is applied in poison()
+        # sine pattern with amplitude 1; beta(x) is applied in poison_components()
         self.sig_pattern_unit = self._make_unit_sig_pattern()
 
         self.sobel_x = torch.tensor([[-1., 0., 1.], [-2., 0., 2.], [-1., 0., 1.]]).view(1, 1, 3, 3)
@@ -187,7 +187,7 @@ class AdaptiveHybridAttack:
         Cover sample: a new random warp at a fixed strength, no signal, label kept.
         The strength is fixed on purpose. If it followed alpha(x), the cover samples would depend on
         the image content, but they are only there to teach the model that "some warp" on its own
-        does not mean airplane. Not needed in freq_only mode since there is no warp to cover.
+        does not mean the target class. Not needed in freq_only mode since there is no warp to cover.
         """
         if self.mode == "freq_only":
             return img

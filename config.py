@@ -13,12 +13,16 @@ class Config:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     num_workers = 4
 
-    # data (only CIFAR-10 is supported at the moment)
+    # data: "cifar10" (default) or "gtsrb" (resized to 32x32, see datasets/gtsrb.py) - use set_dataset()
     dataset_name = "cifar10"
     data_root = "./data"
     num_classes = 10
     image_size = 32
     batch_size = 128
+    NUM_CLASSES = {"cifar10": 10, "gtsrb": 43}
+    # per-channel mean and std used for normalisation (GTSRB values measured on its 32x32 training set)
+    NORMALIZATION = {"cifar10": ([0.4914, 0.4822, 0.4465], [0.2470, 0.2435, 0.2616]),
+                     "gtsrb": ([0.3417, 0.3126, 0.3216], [0.2737, 0.2607, 0.2662])}
 
     # model ("resnet18" or "vgg16")
     model_name = "resnet18"
@@ -33,7 +37,7 @@ class Config:
 
     # backdoor attack - see train.py --attack for the full list of names
     attack_name = "blend"
-    target_label = 0                   # airplane
+    target_label = 0                   # airplane on CIFAR-10, the 20 km/h sign on GTSRB
     poison_rate = 0.05                 # fraction of the whole training set that gets poisoned
 
     # Blend
@@ -43,8 +47,8 @@ class Config:
     # SIG
     sig_delta = 20                     # amplitude on the 0-255 scale
     sig_freq = 6
-    # True: clean-label, as in the original paper - only airplanes are poisoned and their labels
-    # stay the same. False: dirty-label - any image can be poisoned and is relabelled as airplane,
+    # True: clean-label, as in the original paper - only target-class images are poisoned and their
+    # labels stay the same. False: dirty-label - any image can be poisoned and is relabelled as the target,
     # like Blend and WaNet. Use --sig_dirty_label to switch.
     sig_clean_label = True
 
@@ -82,7 +86,7 @@ class Config:
 
     # Range of the two image statistics, used to normalise them to [0, 1].
     # 5th and 95th percentiles from calibrate_adaptive_stats.py (2,000 training images).
-    # Re-run that script if you change the dataset.
+    # For another dataset, re-run it and pass the values with --set (see README).
     adaptive_v_min = 0.1256            # pixel std
     adaptive_v_max = 0.3025
     adaptive_e_min = 0.2672            # mean Sobel edge magnitude
@@ -126,6 +130,10 @@ class Config:
     augment_mode = "crop_flip"  # or "crop" / "flip" to use only one of them         -> "_augcrop" / "_augflip"
     holdout = 0                 # number of training images kept back for validation -> "_val<N>"
     tag_suffix = ""             # extra text for the run name, e.g. to label --set candidates
+
+    def set_dataset(self, name):
+        self.dataset_name = name
+        self.num_classes = self.NUM_CLASSES[name]
 
     def tag(self):
         """Name used for the checkpoint and log files of this run."""
